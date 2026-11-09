@@ -1,2 +1,14 @@
+# Python
 venv/
+aider_venv/
 __pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Secrets: real passwords live here, only .env.example is versioned
+.env
+
+# macOS metadata (SMB share accessed from the MacBook)
+.DS_Store
+._*

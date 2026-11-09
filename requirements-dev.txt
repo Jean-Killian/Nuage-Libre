@@ -1,0 +1,8 @@
+# Development & test tools (not needed in production).
+# Install: venv/bin/pip install -r requirements-dev.txt
+-r requirements.txt
+pytest==9.2.0               # test runner
+pytest-asyncio==1.4.1.post1 # run async test functions
+python-dotenv==1.2.4        # tests read the test database URLs from .env
+ruff==0.17.4                # linter + formatter
+podman-compose==1.6.0       # runs compose.yaml with Podman

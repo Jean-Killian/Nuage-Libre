@@ -1,0 +1,27 @@
+# Tool configuration (the app is not packaged; dependencies are in requirements*.txt).
+[project]
+name = "nuage-libre"
+version = "0.2.0"
+description = "Self-hosted AI chat and personal cloud backed by local LLMs."
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+# One event loop for the whole test session: the SQLAlchemy engine and its
+# pooled connections are created once and must stay on the same loop.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes, I: import sorting, B: bugbear (likely bugs),
+# UP: modern syntax, S: bandit security checks, ASYNC: async pitfalls
+select = ["E", "F", "I", "B", "UP", "S", "ASYNC"]
+ignore = ["B008"]  # FastAPI's Depends() in default arguments is the intended pattern
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101"]  # assert is the normal way to write pytest tests

@@ -1,0 +1,40 @@
+# Nuage Libre - container stack (Podman / Docker Compose format).
+#
+# Start:   venv/bin/podman-compose up -d
+# Stop:    venv/bin/podman-compose down          (data is kept in the volume)
+# Logs:    podman logs -f nuage-postgres
+#
+# Only PostgreSQL is defined for now. Ollama already runs in its own
+# container ("ollama"), and the FastAPI app runs from the venv during
+# development; both will be added here in the deployment phase.
+
+services:
+  postgres:
+    # Official PostgreSQL 18 image + the pgvector extension, which will store
+    # document embeddings for the RAG feature (vector similarity search).
+    image: docker.io/pgvector/pgvector:pg18
+    container_name: nuage-postgres
+    restart: unless-stopped
+    env_file: .env          # POSTGRES_PASSWORD, NUAGE_*_PASSWORD (never committed)
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: postgres
+    ports:
+      # Bound to 127.0.0.1 ONLY: the database is reachable from this machine
+      # (the FastAPI app) but not from the LAN nor from Tailscale peers.
+      # Least exposure: nobody outside needs direct database access.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # Named volume: data survives container re-creation and image upgrades.
+      # pg18+ images store data under /var/lib/postgresql/<version>/...
+      - nuage-pgdata:/var/lib/postgresql
+      # Scripts in this folder run ONCE, when the volume is first created.
+      - ./db/init:/docker-entrypoint-initdb.d:ro,Z
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  nuage-pgdata:
