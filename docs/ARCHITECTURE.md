@@ -120,7 +120,7 @@ for the answer.
 
 Ids appear in URLs (`/api/conversations/{id}`). Sequential integers would reveal
 how many conversations exist and let anyone try `1, 2, 3…`. Random UUIDv4s are
-not guessable. This will matter once multiple users exist (v0.3).
+not guessable. This will matter once multiple users exist (v0.5).
 
 ### 4.6 PostgreSQL rather than SQLite
 
@@ -183,21 +183,113 @@ with **highlight.js**.
   the answer is complete.
 - User messages are never interpreted as Markdown: they stay plain text.
 
+### 4.10 Front-end: visual identity and themes
+
+The UI has its own visual identity, built around the logo (a small *kawaii*
+cloud): "organic and fluid", no rectangular cards, chat bubbles shaped like
+soft asymmetric clouds floating over a living sky.
+
+**Files and how they are linked.** No build step: FastAPI serves the files as
+they are. `GET /` returns `static/index.html` (route in `app/main.py`), and
+every other file is served by the `StaticFiles` mount at `/static/...`.
+
+```
+static/
+├── index.html          structure only; links everything below
+├── css/
+│   ├── themes.css      design tokens (CSS custom properties) + the 3 themes
+│   ├── app.css         layout, cloud bubbles, sky layers, animations
+│   └── markdown.css    typography of the model's answers
+├── js/
+│   ├── theme.js        theme switcher, circular reveal, "themechange" event
+│   ├── sky.js          drifting clouds (day), star canvas (night)
+│   └── app.js          chat logic (API, streaming, conversations, models)
+├── fonts/              Nunito variable font (woff2), SIL Open Font License
+└── vendor/             marked, DOMPurify, highlight.js (pinned)
+```
+
+```html
+<link rel="stylesheet" href="/static/css/themes.css" />   <!-- tokens first -->
+<link rel="stylesheet" href="/static/css/app.css" />      <!-- then components -->
+<script defer src="/static/js/app.js"></script>            <!-- defer: runs after parsing, in order -->
+```
+
+**Design tokens.** Components never use a raw colour: they use variables such
+as `var(--bubble-ai-bg)` or `var(--accent-ink)`. A theme is only a set of
+values for these variables, selected by `<html data-theme="day|night|pro">`.
+Switching theme changes one attribute; the browser recomputes every colour.
+Adding a fourth theme would mean adding one block of variables, no component
+change. This is the same principle as the design tokens of design systems
+(Material, Carbon...).
+
+| Theme | Intent | Background | Specific effects |
+|---|---|---|---|
+| **Ciel de Jour** | Creative, light | Dawn gradient, drifting blurred colour blobs ("aurora"), 7 soft clouds crossing the sky | White fluffy bubbles with "puffs", indigo text `#1E293B` |
+| **Ciel de Nuit** | Creative, dark | `#0F172A`, two breathing nebulae, star field on `<canvas>` | Twinkling, mouse parallax, shooting stars, glowing accents |
+| **Mode Pro** | Jury / technical audience | Pearl grey with a faint dot grid, nothing moves | Pure white surfaces, 1px borders, near-black primary buttons, discreet rounded bubbles |
+
+**Main techniques**
+
+- *Cloud bubbles*: asymmetric `border-radius` (8 values: horizontal / vertical
+  radius of each corner) plus two circles drawn with `::before` / `::after`
+  overlapping the top edge, which turns the rounded shape into a cloud. The
+  pointed corner shows who is speaking.
+- *Star field*: a single `<canvas>` redrawn with `requestAnimationFrame`
+  (hundreds of DOM elements would be much heavier). Each star has a depth: near
+  stars move more with the mouse (parallax). Drawn at `devicePixelRatio` for
+  sharpness on high-density screens.
+- *Theme reveal*: the View Transitions API snapshots the page, the theme
+  changes, and the new snapshot is revealed by a growing `clip-path` circle
+  from the clicked button. Browsers without the API simply switch instantly.
+- *No flash of the wrong theme*: a 10-line inline script in `<head>` applies
+  the saved theme before the first paint (first visit: follows the OS light/dark
+  preference).
+- *Mascot*: an SVG (three circles + a rounded rectangle = cloud) defined once in
+  a `<template>` and cloned where needed. CSS makes it blink, float, and bounce
+  while the model is generating.
+
+**Accessibility (RGAA / WCAG)**
+
+- The pastel brand colours (`#5BCEFA`, `#F5A9B8`) have a contrast of ~1.9:1 on
+  white, below the 4.5:1 minimum for text. They are used for surfaces and
+  decoration only; text and links use darker "ink" variants of the same hue
+  (`--accent-ink`, 5.6:1 in the day theme).
+- `prefers-reduced-motion`: all animations are disabled and the sky is drawn
+  once, without twinkling or shooting stars (RGAA 13.8).
+- The theme switcher follows the WAI-ARIA *radio group* pattern
+  (`role="radio"`, `aria-checked`, arrow keys, roving `tabindex`).
+- Visible keyboard focus everywhere (`:focus-visible`); Escape closes the
+  mobile menu; decorative layers are `aria-hidden`.
+
+**Eco-design and performance**
+
+- No framework, no CSS library: 3 hand-written stylesheets.
+- The star animation runs only while the night theme is shown *and* the tab is
+  visible (`visibilitychange`); inactive sky layers are `visibility: hidden`
+  so their CSS animations are not painted.
+- Animations use `transform` and `opacity` only, which the GPU composites
+  without recalculating the layout.
+
+**Sovereignty.** The previous version loaded Tailwind CSS from a public CDN.
+It is gone: fonts are served locally too (`static/fonts/`), so opening the UI
+makes no request outside the machine. An automated test enforces it
+(`T-SEC-04`).
+
 ## 5. Security
 
 | # | Risk (OWASP reference) | Mitigation in Nuage Libre | Where |
 |---|---|---|---|
 | 1 | Injection – SQL | SQLAlchemy expressions → always parameterised statements; no string concatenation | `repositories/`, test `T-SEC-01` |
-| 2 | Injection – XSS | Markdown answers sanitised by DOMPurify before `innerHTML`; all other text via `textContent` | `static/index.html`, T-SEC-03 |
+| 2 | Injection – XSS | Markdown answers sanitised by DOMPurify before `innerHTML`; all other text via `textContent` | `static/js/app.js` (`renderMarkdown`), T-SEC-03 |
 | 2b | Untrusted parameter (model name) | Allow-list of installed chat models, 422 otherwise | `model_catalog.py`, T-SEC-02 |
-| 2c | Software supply chain | Front-end libraries vendored, pinned, checksummed | `static/vendor/` |
-| 3 | Broken access control | ⚠️ Not yet: no authentication. Mitigated by Tailscale network-level access only | Roadmap v0.3 |
+| 2c | Software supply chain | Front-end libraries and fonts vendored, pinned, checksummed; no CDN (enforced by a test) | `static/vendor/`, `static/fonts/`, T-SEC-04 |
+| 3 | Broken access control | ⚠️ Not yet: no authentication. Mitigated by Tailscale network-level access only | Roadmap v0.5 |
 | 4 | Security misconfiguration | DB port bound to localhost; restricted DB role; secrets outside Git | `compose.yaml`, `db/init/` |
 | 5 | Cryptographic failures / secrets | Random passwords in `.env` (`chmod 600`, git-ignored) | `.env.example` |
 | 6 | Insecure design – data integrity | FK, CHECK constraint, atomic transactions | `models.py`, `chat_service.py` |
 | 7 | Information disclosure | Generic error messages to clients, details only in logs | `chat_service.py` |
 | 8 | Resource exhaustion (LLM10 *Unbounded Consumption*) | Max message length, bounded history, `limit` validated (1–200), fixed context size | `config.py`, routers |
-| 9 | Prompt injection (LLM01) | Not exploitable yet (no documents, no tools). Will be addressed with RAG: documents treated as untrusted data, no tool execution from document content | Roadmap v0.4 |
+| 9 | Prompt injection (LLM01) | Not exploitable yet (no documents, no tools). Will be addressed with RAG: documents treated as untrusted data, no tool execution from document content | Roadmap v0.6 |
 
 References: OWASP Top 10, OWASP Top 10 for LLM Applications (2025),
 ANSSI recommendations for PostgreSQL deployments.

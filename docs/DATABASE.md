@@ -219,8 +219,8 @@ re-creation and image upgrades.
 
 ## 8. Next evolutions
 
-- **v0.3 – users**: `users (id, username UNIQUE, password_hash, created_at)` and
+- **v0.5 – users**: `users (id, username UNIQUE, password_hash, created_at)` and
   `conversations.user_id` FK, so each user only sees their own conversations.
-- **v0.4 – RAG**: `documents (id, user_id, filename, mime_type, size, uploaded_at)`
+- **v0.6 – RAG**: `documents (id, user_id, filename, mime_type, size, uploaded_at)`
   and `document_chunks (id, document_id, content, embedding VECTOR(768))` with an
   HNSW index for similarity search (pgvector).

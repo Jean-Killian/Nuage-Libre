@@ -59,6 +59,8 @@ venv/bin/ruff check . && venv/bin/ruff format --check .
 | T-CONV-05 | Delete removes conversation and messages (cascade) | 204, then GET → 404, second DELETE → 404 |
 | T-HEALTH-01 | Health reports database and AI engine | `database=up`, `ollama=up`, version |
 | T-UI-01 | Web UI served at `/` | 200, page contains "Nuage Libre" |
+| T-UI-02 | Every CSS / JS / font file referenced by the page is served | Each `/static/...` URL found in the HTML → 200 with the right content type |
+| T-SEC-04 | Sovereignty: the UI loads nothing from the internet | No `http(s)://` or `//` URL in `src`/`href` of the page nor in `url(...)` of our stylesheets |
 
 ### Model selection (`tests/test_models.py`)
 
@@ -90,7 +92,7 @@ venv/bin/ruff check . && venv/bin/ruff format --check .
 Run on 2026-11-09 (Python 3.15.0, PostgreSQL 18, pytest 9.2):
 
 ```
-33 passed in 0.34s
+35 passed in 0.35s
 ```
 
 ### Checking that the tests can actually fail
@@ -104,6 +106,9 @@ introduced to check that the tests detect them (mutation testing, done by hand):
 | Exchange saved even when the model fails (removed the `return` after the error) | ❌ `T-CHAT-05` failed (rows written to DB) |
 
 Both bugs were reverted afterwards and the suite went back to green.
+
+The same check was done for `T-SEC-04`: adding a Google Fonts `<link>` to the
+page made the test fail (`assert ['https://fon...amily=Nunito'] == []`).
 
 ## 4. End-to-end test with the real model
 
@@ -143,8 +148,32 @@ JavaScript is not a real user gesture, so the browser refuses clipboard access.
 This led to a more robust implementation (fallback to `execCommand('copy')` when
 the Clipboard API is refused), then the real-click test above passed.
 
-## 6. Not covered yet
+## 6. End-to-end test: visual identity and themes (v0.4)
 
-- Automated browser tests in CI (Playwright) — planned with the CI pipeline (v0.6).
+Same tooling, real stack, 2026-11-09. Screenshots taken for each theme at
+1280 × 820 (desktop) and 390 × 844 (mobile).
+
+| ID | Step | Expected | Observed |
+|---|---|---|---|
+| E2E-TH-01 | Open the UI with each saved theme (day / night / pro) | Right sky, colours and bubbles; no JavaScript error | ✅ 3 × 2 screenshots; console empty; Nunito loaded (`document.fonts.check`) |
+| E2E-TH-02 | Real mouse click on the night option | Theme switches with a circular reveal, choice saved, `aria-checked` updated | ✅ `data-theme=night`, `localStorage=night`, `aria-checked` = `false,true,false` |
+| E2E-TH-03 | Keyboard: focus the switcher, press → | Next theme selected, focus follows | ✅ `pro`, focus on the *pro* option |
+| E2E-TH-04 | Send a message with `qwen3:4b` in the night theme | Typing indicator, mascot bounces, answer rendered (code + table) | ✅ `is-generating` set during generation; 1 code block with *Copy*, 1 table; `151.9 tok/s` |
+| E2E-TH-05 | Mobile: open the menu, click the backdrop | Sidebar covers the content, closes on backdrop click | ✅ after fix (see below) |
+
+Two defects found and fixed during this test:
+
+- **Mobile menu see-through**: the sidebar used a translucent "frosted glass"
+  background; behind it the large welcome title stayed readable, even at 96 %
+  opacity, because the blur is not rendered everywhere. The mobile menu now uses
+  an opaque background.
+- **Table border**: tables are `display: block` (to scroll on small screens),
+  so their rounded border spanned the whole bubble while the cells did not.
+  Fixed with `width: max-content; max-width: 100%`.
+
+## 7. Not covered yet
+
+- Automated browser tests in CI (Playwright) — planned with the CI pipeline (v0.8).
 - Load testing (several concurrent generations).
-- Authentication and authorisation tests — with v0.3.
+- Automated colour-contrast audit of the three themes (planned with the RGAA audit, v0.7).
+- Authentication and authorisation tests — with v0.5.

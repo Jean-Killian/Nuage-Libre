@@ -38,7 +38,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title="Nuage Libre API",
     description="Self-hosted AI chat backed by a local Ollama engine.",
-    version="0.3.0",
+    version="0.4.0",
     lifespan=lifespan,
 )
 

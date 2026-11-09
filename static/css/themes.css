@@ -1,0 +1,272 @@
+/* =============================================================================
+   Nuage Libre: design tokens and the three themes
+   =============================================================================
+
+   HOW THEMING WORKS
+
+   Every colour, shadow and radius used by the interface is a CSS custom
+   property ("design token") such as --text or --bubble-ai-bg. Components in
+   app.css and markdown.css ONLY use these tokens, never raw colours.
+
+   A theme is therefore nothing more than a set of values for these tokens,
+   selected by the data-theme attribute on the <html> element:
+
+       <html data-theme="day">     Ciel de Jour  (creative, light)
+       <html data-theme="night">   Ciel de Nuit  (creative, dark)
+       <html data-theme="pro">     Mode Pro      (minimal, for the jury)
+
+   Switching theme = changing one attribute (js/theme.js). The browser then
+   recomputes every var(...) at once, and the `transition` rules in app.css
+   animate the change smoothly.
+
+   BRAND
+   - Sky blue  #5BCEFA and pink #F5A9B8 are the brand accents.
+   - They are pastel, so they are too light to be used for TEXT on a light
+     background (contrast ~1.9:1, the WCAG/RGAA minimum is 4.5:1). For text
+     and links we use darker "ink" variants (--accent-ink) that keep the hue
+     but pass the contrast check. The pastel colours are kept for surfaces,
+     glows, gradients and decoration.
+   ========================================================================== */
+
+/* ---- Font: Nunito (rounded, friendly), served locally ---------------------
+   Vendored in static/fonts/ instead of Google Fonts so that opening the UI
+   makes no request to a third-party server (sovereignty, see AGENTS.md).
+   It is a *variable* font: one file contains every weight from 200 to 1000.
+   font-display: swap shows the fallback font immediately and swaps when
+   Nunito is loaded, so text is never invisible. */
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 200 1000;
+  font-display: swap;
+  src: url("../fonts/nunito-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA,
+    U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193,
+    U+2212, U+2215, U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Nunito";
+  font-style: normal;
+  font-weight: 200 1000;
+  font-display: swap;
+  src: url("../fonts/nunito-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF,
+    U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020,
+    U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+/* ---- Tokens shared by every theme ----------------------------------------- */
+:root {
+  --brand-blue: #5bcefa;
+  --brand-pink: #f5a9b8;
+
+  --font-ui: "Nunito", ui-rounded, "SF Pro Rounded", system-ui, sans-serif;
+  --font-mono: ui-monospace, "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+
+  /* Organic, asymmetric radii: four different corners so that no two
+     bubbles look like "boxes". The pointed corner (8px) is the "tail" that
+     shows who is speaking. Syntax: horizontal radii / vertical radii. */
+  --radius-ai: 8px 34px 30px 36px / 8px 30px 34px 28px;
+  --radius-user: 34px 8px 36px 30px / 30px 8px 28px 34px;
+  --radius-pill: 999px;
+
+  /* Motion: one easing curve everywhere gives the UI a coherent "feel".
+     This one overshoots slightly, which feels soft and bouncy. */
+  --ease-soft: cubic-bezier(0.34, 1.36, 0.64, 1);
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --theme-fade: 600ms;
+
+  /* Code blocks keep the same dark look in every theme: it matches the
+     highlight.js "github-dark" palette and reads well on any background. */
+  --code-block-bg: #0d1117;
+  --code-block-border: rgba(148, 163, 184, 0.22);
+  --code-block-header: #8b949e;
+}
+
+/* ---- Thème 1: Ciel de Jour -------------------------------------------------
+   Dawn sky: white melting into very light blue, with a hint of pink near
+   the horizon. Deep indigo text. Bubbles are white, fluffy clouds. */
+:root,
+[data-theme="day"] {
+  color-scheme: light;
+
+  --text: #1e293b;
+  --text-soft: #475569;
+  --text-faint: #64748b;              /* 4.76:1 on white: still readable */
+  --accent-ink: #0a6f99;              /* sky blue darkened for text, 5.6:1 */
+  --accent-ink-pink: #b4436a;         /* pink darkened for text, 5.3:1 */
+
+  --sky-base: #eef8ff;
+
+  --surface: rgba(255, 255, 255, 0.55);       /* sidebar, header glass */
+  --surface-strong: rgba(255, 255, 255, 0.82);
+  --surface-hover: rgba(255, 255, 255, 0.75);
+  --hairline: rgba(30, 41, 59, 0.08);
+
+  --bubble-ai-bg: #ffffff;
+  --bubble-ai-text: #1e293b;
+  --bubble-user-bg: linear-gradient(135deg, #bfeafd 0%, #d9f2fe 55%, #fde3e9 100%);
+  --bubble-user-text: #0f2a44;
+  --bubble-shadow: 0 18px 40px -18px rgba(30, 64, 120, 0.28),
+    0 4px 14px -6px rgba(91, 206, 250, 0.25);
+  --bubble-glow: none;
+
+  --error-bg: #fff1f3;
+  --error-text: #9f1239;
+  --error-border: #fecdd6;
+
+  --thought-bg: rgba(238, 248, 255, 0.9);
+  --thought-text: #475569;
+
+  --input-bg: rgba(255, 255, 255, 0.9);
+  --input-shadow: 0 20px 50px -20px rgba(30, 64, 120, 0.35),
+    0 0 0 1px rgba(91, 206, 250, 0.25);
+
+  --send-bg: linear-gradient(135deg, #5bcefa, #f5a9b8);
+  --send-text: #0f2a44;
+  --send-glow: 0 8px 22px -8px rgba(91, 206, 250, 0.8);
+
+  --focus-ring: 0 0 0 3px rgba(91, 206, 250, 0.55);
+
+  --status-up: #10b981;
+  --status-down: #e11d48;
+  --status-unknown: #94a3b8;
+
+  --md-heading: #0f172a;
+  --md-strong: #0f172a;
+  --md-quote-bar: var(--brand-pink);
+  --md-inline-code-bg: #eef6fb;
+  --md-inline-code-border: #d3e9f5;
+  --md-inline-code-text: #0b4f6c;
+  --md-table-border: #dbe7ef;
+  --md-table-head: #f1f8fc;
+
+  --scrollbar: rgba(30, 41, 59, 0.18);
+}
+
+/* ---- Thème 2: Ciel de Nuit -------------------------------------------------
+   Deep night sky #0F172A with a twinkling star field (js/sky.js). The blue
+   and pink accents glow softly, as if lit from within. Off-white text. */
+[data-theme="night"] {
+  color-scheme: dark;
+
+  --text: #f1f5f9;
+  --text-soft: #cbd5e1;
+  --text-faint: #94a3b8;
+  --accent-ink: #7dd8fb;
+  --accent-ink-pink: #f7bccb;
+
+  --sky-base: #0f172a;
+
+  --surface: rgba(15, 23, 42, 0.45);
+  --surface-strong: rgba(15, 23, 42, 0.78);
+  --surface-hover: rgba(91, 206, 250, 0.08);
+  --hairline: rgba(148, 163, 184, 0.14);
+
+  /* Opaque on purpose: the "puffs" on top of AI bubbles are separate
+     circles overlapping the bubble; with a translucent colour the
+     overlapping area would look darker. */
+  --bubble-ai-bg: #1a2436;
+  --bubble-ai-text: #e2e8f0;
+  --bubble-user-bg: linear-gradient(135deg, rgba(91, 206, 250, 0.3) 0%,
+      rgba(129, 140, 248, 0.22) 55%, rgba(245, 169, 184, 0.3) 100%);
+  --bubble-user-text: #f8fafc;
+  --bubble-shadow: 0 20px 50px -20px rgba(0, 0, 0, 0.7);
+  /* The luminescent halo around bubbles. */
+  --bubble-glow: 0 0 28px -6px rgba(91, 206, 250, 0.35);
+
+  --error-bg: rgba(76, 5, 25, 0.75);
+  --error-text: #fecdd3;
+  --error-border: rgba(244, 63, 94, 0.45);
+
+  --thought-bg: rgba(15, 23, 42, 0.7);
+  --thought-text: #a5b4c8;
+
+  --input-bg: rgba(30, 41, 59, 0.78);
+  --input-shadow: 0 0 0 1px rgba(91, 206, 250, 0.25),
+    0 0 40px -12px rgba(91, 206, 250, 0.45), 0 0 60px -20px rgba(245, 169, 184, 0.4);
+
+  --send-bg: linear-gradient(135deg, #5bcefa, #f5a9b8);
+  --send-text: #0f172a;
+  --send-glow: 0 0 18px rgba(91, 206, 250, 0.65), 0 0 34px rgba(245, 169, 184, 0.45);
+
+  --focus-ring: 0 0 0 3px rgba(91, 206, 250, 0.5), 0 0 16px rgba(91, 206, 250, 0.6);
+
+  --status-up: #34d399;
+  --status-down: #fb7185;
+  --status-unknown: #64748b;
+
+  --md-heading: #ffffff;
+  --md-strong: #ffffff;
+  --md-quote-bar: var(--brand-pink);
+  --md-inline-code-bg: rgba(15, 23, 42, 0.8);
+  --md-inline-code-border: rgba(91, 206, 250, 0.25);
+  --md-inline-code-text: #a5e6fd;
+  --md-table-border: rgba(148, 163, 184, 0.22);
+  --md-table-head: rgba(15, 23, 42, 0.6);
+
+  --scrollbar: rgba(148, 163, 184, 0.25);
+}
+
+/* ---- Thème 3: Mode Pro -----------------------------------------------------
+   Minimal SaaS look for a technical audience: pearl grey canvas, pure white
+   surfaces, crisp 1px borders, near-perfect contrast, no animation in the
+   background. The organic bubble radii are kept (more discreet) so the
+   brand is still recognisable. */
+[data-theme="pro"] {
+  color-scheme: light;
+
+  --text: #0f172a;
+  --text-soft: #334155;
+  --text-faint: #475569;              /* 7.6:1 on white */
+  --accent-ink: #0369a1;
+  --accent-ink-pink: #be185d;
+
+  --sky-base: #f4f5f7;
+
+  --surface: #ffffff;
+  --surface-strong: #ffffff;
+  --surface-hover: #f1f5f9;
+  --hairline: #e4e7ec;
+
+  --radius-ai: 6px 22px 22px 22px / 6px 20px 22px 20px;
+  --radius-user: 22px 6px 22px 22px / 20px 6px 20px 22px;
+
+  --bubble-ai-bg: #ffffff;
+  --bubble-ai-text: #0f172a;
+  --bubble-user-bg: #0f172a;
+  --bubble-user-text: #f8fafc;
+  --bubble-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+  --bubble-glow: none;
+
+  --error-bg: #fef2f2;
+  --error-text: #991b1b;
+  --error-border: #fecaca;
+
+  --thought-bg: #f8fafc;
+  --thought-text: #475569;
+
+  --input-bg: #ffffff;
+  --input-shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 0 0 1px #e4e7ec;
+
+  --send-bg: #0f172a;
+  --send-text: #ffffff;
+  --send-glow: none;
+
+  --focus-ring: 0 0 0 3px rgba(91, 206, 250, 0.6);
+
+  --status-up: #059669;
+  --status-down: #dc2626;
+  --status-unknown: #94a3b8;
+
+  --md-heading: #0f172a;
+  --md-strong: #0f172a;
+  --md-quote-bar: #cbd5e1;
+  --md-inline-code-bg: #f1f5f9;
+  --md-inline-code-border: #e2e8f0;
+  --md-inline-code-text: #0f172a;
+  --md-table-border: #e4e7ec;
+  --md-table-head: #f8fafc;
+
+  --scrollbar: #cbd5e1;
+}

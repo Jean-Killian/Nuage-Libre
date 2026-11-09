@@ -18,8 +18,12 @@ These rules apply to any AI assistant (Claude, Roo Code, Cline, Aider...) workin
    file, then `venv/bin/alembic upgrade head`. Never edit the schema by hand.
 5. **Security:** parameterised queries only; insert untrusted text in the UI with
    `textContent`. The only `innerHTML` allowed is `renderMarkdown()` in
-   `static/index.html`, which sanitises with DOMPurify. Front-end libraries are
-   vendored in `static/vendor/` (no CDN). Never commit `.env`.
+   `static/js/app.js`, which sanitises with DOMPurify. Front-end libraries and
+   fonts are vendored in `static/vendor/` and `static/fonts/` (no CDN, checked by
+   test T-SEC-04). Never commit `.env`.
+8. **Front-end styling:** use the design tokens of `static/css/themes.css`
+   (`var(--...)`), never raw colours in components, so the three themes keep
+   working. Respect `prefers-reduced-motion` for any new animation.
 6. **Document in English:** detailed code comments and docstrings explaining the
    *why*, so the project owner can understand and present every line.
 7. **Tests must pass before finishing:**

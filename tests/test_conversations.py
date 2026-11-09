@@ -1,5 +1,6 @@
 """Integration tests for the /api/conversations routes and /api/health."""
 
+import re
 import uuid
 
 from tests.conftest import parse_events
@@ -71,3 +72,36 @@ async def test_index_page_is_served(client):
 
     assert response.status_code == 200
     assert "Nuage Libre" in response.text
+
+
+async def test_front_end_assets_are_served(client):
+    """T-UI-02: every stylesheet, script and font referenced by the page is
+    served by FastAPI's /static mount with the right content type."""
+    page = (await client.get("/")).text
+    assets = re.findall(r'(?:href|src)="(/static/[^"]+)"', page)
+
+    # The page really is split into separate files (themes, layout, logic...).
+    assert "/static/css/themes.css" in assets
+    assert "/static/js/app.js" in assets
+    for path in assets:
+        response = await client.get(path)
+        assert response.status_code == 200, path
+        if path.endswith(".css"):
+            assert response.headers["content-type"].startswith("text/css"), path
+        elif path.endswith(".js"):
+            assert "javascript" in response.headers["content-type"], path
+
+
+async def test_page_loads_nothing_from_the_internet(client):
+    """T-SEC-04 (sovereignty): the UI references no third-party server, so
+    opening it never leaks the user's IP address or activity to a CDN.
+    Checked on the HTML page and on our own CSS (fonts, @import...)."""
+    page = (await client.get("/")).text
+    css = ""
+    for name in ("themes", "app", "markdown"):
+        css += (await client.get(f"/static/css/{name}.css")).text
+
+    # Any absolute (http://, https://) or protocol-relative (//) URL is external.
+    external = re.findall(r'(?:src|href)="((?:https?:)?//[^"]*)"', page)
+    external += re.findall(r"url\(\s*['\"]?((?:https?:)?//[^)'\"]*)", css)
+    assert external == []

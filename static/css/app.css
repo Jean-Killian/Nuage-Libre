@@ -1,0 +1,1200 @@
+/* =============================================================================
+   Nuage Libre: layout and components
+   =============================================================================
+
+   Design direction: "organic and fluid". The interface is an open canvas
+   floating over a living sky; there are no rectangular cards. Every component
+   uses the design tokens from themes.css, so this file never needs to know
+   which theme is active (except the few theme-specific effects grouped at
+   the end of each section).
+
+   Sections
+     1. Base and accessibility helpers
+     2. Living sky (background layers)
+     3. App layout (sidebar + main column)
+     4. Brand and mascot
+     5. Sidebar contents
+     6. Top bar: model menu, status, theme switcher
+     7. Messages: cloud bubbles
+     8. Reasoning panel, statistics, typing indicator
+     9. Welcome screen
+    10. Composer (message input)
+    11. Animations and reduced motion
+   ========================================================================== */
+
+/* ---- 1. Base and accessibility helpers ----------------------------------- */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  /* Fallback colour while the sky layers load (and if they fail). */
+  background: var(--sky-base);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  /* Token changes are animated when the theme switches. */
+  transition: background-color var(--theme-fade) ease, color var(--theme-fade) ease;
+}
+
+button,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  background: none;
+  border: 0;
+  padding: 0;
+}
+
+/* The HTML `hidden` attribute must win over any display rule below. */
+[hidden] {
+  display: none !important;
+}
+
+/* Visible only to screen readers (labels of icon-only controls). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Keyboard focus is always visible (RGAA criterion 10.7), but the ring is
+   not drawn after a mouse click thanks to :focus-visible. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.svg-defs {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* Thin, theme-coloured scrollbars. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar) transparent;
+}
+
+/* ---- 2. Living sky -------------------------------------------------------
+   .sky is fixed behind everything (z-index 0). Each theme has its own layer;
+   the inactive ones fade out, then become visibility:hidden so the browser
+   stops painting them (their animations cost nothing while hidden). */
+
+.sky {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.sky-layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  visibility: hidden;
+  /* visibility switches at the END of the fade-out... */
+  transition: opacity var(--theme-fade) ease, visibility 0s linear var(--theme-fade);
+}
+
+[data-theme="day"] .sky-day,
+[data-theme="night"] .sky-night,
+[data-theme="pro"] .sky-pro {
+  opacity: 1;
+  visibility: visible;
+  /* ...and at the START of the fade-in. */
+  transition: opacity var(--theme-fade) ease, visibility 0s;
+}
+
+/* Day: a dawn sky, white melting into pale blue, a blush of pink low on the
+   horizon. Large blurred colour blobs ("aurora") drift slowly, so the
+   colours of the sky keep moving without ever drawing attention. */
+.sky-day {
+  background: linear-gradient(180deg, #d9f1ff 0%, #eef8ff 38%, #fbfdff 70%, #fff1f4 100%);
+}
+
+.aurora {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(70px);
+  opacity: 0.75;
+  will-change: transform;
+}
+
+.aurora-1 {
+  width: 55vmax;
+  height: 55vmax;
+  top: -20vmax;
+  left: -10vmax;
+  background: radial-gradient(circle, rgba(91, 206, 250, 0.55), transparent 65%);
+  animation: aurora-drift-1 38s ease-in-out infinite alternate;
+}
+
+.aurora-2 {
+  width: 45vmax;
+  height: 45vmax;
+  bottom: -18vmax;
+  right: -8vmax;
+  background: radial-gradient(circle, rgba(245, 169, 184, 0.5), transparent 65%);
+  animation: aurora-drift-2 46s ease-in-out infinite alternate;
+}
+
+.aurora-3 {
+  width: 40vmax;
+  height: 40vmax;
+  top: 25%;
+  left: 40%;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.9), transparent 60%);
+  animation: aurora-drift-3 52s ease-in-out infinite alternate;
+}
+
+@keyframes aurora-drift-1 {
+  to { transform: translate(18vw, 12vh) scale(1.15); }
+}
+@keyframes aurora-drift-2 {
+  to { transform: translate(-16vw, -10vh) scale(1.2); }
+}
+@keyframes aurora-drift-3 {
+  to { transform: translate(-22vw, 8vh) scale(0.85); }
+}
+
+/* Drifting background clouds, created by js/sky.js. Each one is a single
+   element whose ::before / ::after form the puffs. JS gives each cloud its
+   own height, size, speed and starting point through custom properties. */
+.drift-clouds {
+  position: absolute;
+  inset: 0;
+}
+
+.drift-cloud {
+  position: absolute;
+  left: 0;
+  top: var(--y, 20%);
+  width: 180px;
+  height: 56px;
+  border-radius: 999px;
+  background: #ffffff;
+  opacity: var(--opacity, 0.7);
+  filter: blur(var(--blur, 1px));
+  transform: translateX(-30vw) scale(var(--scale, 1));
+  animation: cloud-drift var(--duration, 90s) linear var(--delay, 0s) infinite;
+  will-change: transform;
+}
+
+.drift-cloud::before,
+.drift-cloud::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  background: inherit;
+}
+
+.drift-cloud::before {
+  width: 80px;
+  height: 80px;
+  top: -42px;
+  left: 30px;
+}
+
+.drift-cloud::after {
+  width: 60px;
+  height: 60px;
+  top: -28px;
+  left: 92px;
+}
+
+@keyframes cloud-drift {
+  from { transform: translateX(-30vw) scale(var(--scale, 1)); }
+  to { transform: translateX(130vw) scale(var(--scale, 1)); }
+}
+
+/* Night: deep blue sky, two faint nebulae in the brand colours, and the
+   star field drawn on a <canvas> by js/sky.js. */
+.sky-night {
+  background:
+    radial-gradient(ellipse 120% 70% at 50% 120%, #1e1b4b 0%, transparent 60%),
+    radial-gradient(ellipse 80% 50% at 80% -10%, #172554 0%, transparent 60%),
+    #0f172a;
+}
+
+.nebula {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(90px);
+  opacity: 0.35;
+  animation: nebula-breathe 18s ease-in-out infinite alternate;
+}
+
+.nebula-1 {
+  width: 50vmax;
+  height: 30vmax;
+  top: 10%;
+  left: -15vmax;
+  background: radial-gradient(circle, rgba(91, 206, 250, 0.6), transparent 70%);
+}
+
+.nebula-2 {
+  width: 45vmax;
+  height: 28vmax;
+  bottom: 5%;
+  right: -12vmax;
+  background: radial-gradient(circle, rgba(245, 169, 184, 0.55), transparent 70%);
+  animation-delay: -9s;
+}
+
+@keyframes nebula-breathe {
+  from { opacity: 0.22; transform: scale(1); }
+  to { opacity: 0.42; transform: scale(1.12); }
+}
+
+.star-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+/* Pro: a calm pearl-grey canvas with a barely visible dot grid (a common
+   visual cue of technical tools). Nothing moves. */
+.sky-pro {
+  background:
+    radial-gradient(circle at 1px 1px, rgba(15, 23, 42, 0.07) 1px, transparent 0) 0 0 / 22px 22px,
+    linear-gradient(180deg, #fafbfc 0%, #f4f5f7 100%);
+}
+
+/* ---- 3. App layout ------------------------------------------------------- */
+
+.app {
+  position: relative;
+  z-index: 1;               /* above the sky */
+  display: flex;
+  height: 100dvh;           /* dvh: correct height on mobile with browser bars */
+}
+
+.main {
+  flex: 1;
+  min-width: 0;             /* lets long content shrink instead of overflowing */
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- 4. Brand and mascot ------------------------------------------------- */
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 6px 18px;
+}
+
+.brand-mascot {
+  width: 52px;
+  flex-shrink: 0;
+  animation: mascot-float 5s ease-in-out infinite;
+}
+
+.brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.brand-name {
+  font-size: 1.3rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+}
+
+.brand-accent {
+  /* Gradient text: the brand colours fill the letters. */
+  background: linear-gradient(90deg, var(--accent-ink), var(--accent-ink-pink));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.brand-tagline {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+/* The mascot SVG (cloned from <template id="mascot-template">). */
+.mascot {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+  filter: drop-shadow(0 8px 12px rgba(91, 206, 250, 0.35));
+}
+
+.mascot-body {
+  fill: url(#mascot-fill);
+}
+
+.mascot-stop-a {
+  stop-color: #ffffff;
+}
+
+.mascot-stop-b {
+  stop-color: #c6ecfd;
+}
+
+.mascot-eye {
+  fill: #1e293b;
+  /* Blink: the eyes are squashed vertically for a split second. transform-box
+     makes the transform origin relative to each eye, not to the whole SVG. */
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: mascot-blink 4.5s infinite;
+}
+
+.mascot-sparkle {
+  fill: #ffffff;
+}
+
+.mascot-blush {
+  fill: var(--brand-pink);
+  opacity: 0.75;
+}
+
+.mascot-smile {
+  fill: none;
+  stroke: #1e293b;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+}
+
+@keyframes mascot-blink {
+  0%, 92%, 100% { transform: scaleY(1); }
+  95% { transform: scaleY(0.1); }
+}
+
+@keyframes mascot-float {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50% { transform: translateY(-5px) rotate(2deg); }
+}
+
+/* While the model is generating, the mascot bounces: it is "thinking". */
+body.is-generating .brand-mascot {
+  animation: mascot-think 0.9s var(--ease-soft) infinite alternate;
+}
+
+@keyframes mascot-think {
+  from { transform: translateY(0) scale(1, 1); }
+  to { transform: translateY(-6px) scale(1.04, 0.96); }
+}
+
+[data-theme="night"] .mascot {
+  filter: drop-shadow(0 0 10px rgba(91, 206, 250, 0.55)) drop-shadow(0 0 22px rgba(245, 169, 184, 0.35));
+}
+[data-theme="night"] .mascot-stop-a { stop-color: #e0f6ff; }
+[data-theme="night"] .mascot-stop-b { stop-color: #8fdcfb; }
+
+/* Pro: the mascot becomes a flat, quiet logo (no blush, no floating). */
+[data-theme="pro"] .mascot { filter: none; }
+[data-theme="pro"] .mascot-stop-a,
+[data-theme="pro"] .mascot-stop-b { stop-color: #5bcefa; }
+[data-theme="pro"] .mascot-blush { opacity: 0; }
+[data-theme="pro"] .brand-mascot { animation: none; }
+
+/* ---- 5. Sidebar ----------------------------------------------------------
+   No hard border: a translucent "frosted glass" panel whose right edge
+   dissolves into the sky. */
+
+.sidebar {
+  width: 290px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 14px 14px;
+  background: var(--surface);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+  border-radius: 0 36px 36px 0;
+  transition: background var(--theme-fade) ease, transform 320ms var(--ease-out);
+}
+
+[data-theme="pro"] .sidebar {
+  border-radius: 0;
+  box-shadow: 1px 0 0 var(--hairline);
+}
+
+.new-chat {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-pill);
+  font-weight: 800;
+  color: var(--send-text);
+  background: var(--send-bg);
+  box-shadow: var(--send-glow);
+  transition: transform 240ms var(--ease-soft), box-shadow 240ms ease;
+}
+
+.new-chat:hover {
+  transform: translateY(-2px) scale(1.02);
+}
+
+.new-chat:active {
+  transform: scale(0.97);
+}
+
+.conversations {
+  flex: 1;
+  overflow-y: auto;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
+
+.conversation-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.conversation-item {
+  display: flex;
+  align-items: center;
+  border-radius: 18px 22px 20px 16px;
+  transition: background 200ms ease, transform 240ms var(--ease-soft);
+}
+
+.conversation-item:hover {
+  background: var(--surface-hover);
+  transform: translateX(3px);
+}
+
+.conversation-item.is-active {
+  background: var(--surface-strong);
+  box-shadow: var(--bubble-shadow);
+}
+
+.conversation-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  text-align: left;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.conversation-open::before {
+  /* A tiny cloud dot in front of each title, coloured when active. */
+  content: "";
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--hairline);
+  transition: background 200ms ease, box-shadow 200ms ease;
+}
+
+.is-active .conversation-open {
+  color: var(--text);
+}
+
+.is-active .conversation-open::before {
+  background: var(--brand-blue);
+  box-shadow: 0 0 0 3px rgba(91, 206, 250, 0.25);
+}
+
+.conversation-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-delete {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  margin-right: 4px;
+  border-radius: 50%;
+  color: var(--text-faint);
+  transition: color 160ms ease, background 160ms ease, opacity 160ms ease;
+}
+
+.conversation-delete:hover {
+  color: var(--error-text);
+  background: var(--error-bg);
+}
+
+/* On devices with a mouse, the delete button only appears on hover/focus,
+   to keep the list calm. Touch screens always show it (no hover there). */
+@media (hover: hover) {
+  .conversation-delete { opacity: 0; }
+  .conversation-item:hover .conversation-delete,
+  .conversation-delete:focus-visible { opacity: 1; }
+}
+
+.empty-list {
+  margin: 24px 8px;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--text-faint);
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  background: rgba(15, 23, 42, 0.5);
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+/* Mobile: the sidebar slides in from the left, above the content. */
+@media (max-width: 767px) {
+  .sidebar {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 30;
+    width: min(86vw, 310px);
+    /* Opaque here: the panel covers the conversation, and large white text
+       behind it stayed visible even at 96 % opacity (the frosted-glass blur
+       is not available in every browser, so it cannot be relied on). */
+    background: var(--sky-base);
+    box-shadow: 0 0 60px rgba(15, 23, 42, 0.35);
+    transform: translateX(-105%);
+  }
+  .sidebar.is-open {
+    transform: translateX(0);
+  }
+}
+
+/* ---- 6. Top bar ----------------------------------------------------------
+   No bar at all, visually: just a few pills floating over the sky. */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px clamp(12px, 3vw, 28px);
+}
+
+.pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow: 0 0 0 1px var(--hairline);
+  transition: background var(--theme-fade) ease, box-shadow var(--theme-fade) ease;
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  color: var(--text-soft);
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--hairline);
+}
+
+.sidebar-toggle {
+  flex-shrink: 0;
+}
+
+@media (min-width: 768px) {
+  .sidebar-toggle { display: none; }
+}
+
+.model-pill {
+  min-width: 0;
+  padding-left: 14px;
+}
+
+.status-dot {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--status-unknown);
+  transition: background 300ms ease, box-shadow 300ms ease;
+}
+
+.status-dot.is-up {
+  background: var(--status-up);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-up) 22%, transparent);
+  animation: status-pulse 2.8s ease-in-out infinite;
+}
+
+.status-dot.is-down {
+  background: var(--status-down);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--status-down) 25%, transparent);
+}
+
+@keyframes status-pulse {
+  50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--status-up) 8%, transparent); }
+}
+
+/* Native <select> kept for accessibility (keyboard, screen readers, mobile
+   pickers), restyled: appearance:none removes the browser arrow and a CSS
+   chevron is drawn in .select-wrap::after instead. */
+.select-wrap {
+  position: relative;
+  min-width: 0;
+  display: flex;
+}
+
+.select-wrap::after {
+  content: "";
+  position: absolute;
+  right: 14px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--text-faint);
+  border-bottom: 2px solid var(--text-faint);
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+
+.model-select {
+  appearance: none;
+  min-width: 0;
+  max-width: min(46vw, 340px);
+  padding: 8px 34px 8px 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface-strong);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  color: var(--text);
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+/* The dropdown list itself is drawn by the OS: give it readable colours. */
+.model-select option {
+  background: var(--sky-base);
+  color: var(--text);
+}
+
+/* Theme switcher: three round buttons and a "blob" that slides under the
+   selected one. Its position is a custom property set by js/theme.js. */
+.theme-switcher {
+  position: relative;
+  margin-left: auto;
+  flex-shrink: 0;
+  gap: 2px;
+}
+
+.theme-indicator {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--send-bg);
+  box-shadow: var(--send-glow);
+  transform: translateX(calc(var(--theme-index, 0) * 40px));
+  transition: transform 480ms var(--ease-soft), background var(--theme-fade) ease;
+}
+
+.theme-option {
+  position: relative;      /* above the indicator */
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  color: var(--text-faint);
+  transition: color 300ms ease, transform 240ms var(--ease-soft);
+}
+
+.theme-option:hover {
+  color: var(--text);
+  transform: scale(1.08);
+}
+
+.theme-option[aria-checked="true"] {
+  color: var(--send-text);
+}
+
+/* ---- 7. Messages: cloud bubbles ------------------------------------------ */
+
+.chat {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px clamp(12px, 3vw, 28px) 24px;
+  /* Messages fade out softly under the top bar instead of being cut. */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 28px);
+  mask-image: linear-gradient(180deg, transparent 0, #000 28px);
+}
+
+.messages {
+  max-width: 860px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 30px;               /* room for the puffs above AI bubbles */
+  padding-top: 24px;
+}
+
+.msg {
+  display: flex;
+  animation: float-in 620ms var(--ease-soft) both;
+}
+
+.msg--user {
+  justify-content: flex-end;
+}
+
+.bubble {
+  position: relative;
+  max-width: min(85%, 720px);
+  padding: 16px 22px;
+  overflow-wrap: anywhere;
+  transition: background var(--theme-fade) ease, color var(--theme-fade) ease,
+    box-shadow var(--theme-fade) ease;
+}
+
+/* AI answer: a white, fluffy cloud. The two "puffs" are circles of the same
+   colour overlapping the top edge, which turns the rounded shape into a
+   cloud silhouette. They sit behind the text (z-index: -1 inside the
+   bubble's own stacking context created by `isolation: isolate`). */
+.bubble--ai {
+  isolation: isolate;
+  min-width: 132px;
+  border-radius: var(--radius-ai);
+  background: var(--bubble-ai-bg);
+  color: var(--bubble-ai-text);
+  box-shadow: var(--bubble-shadow), var(--bubble-glow);
+}
+
+.bubble--ai::before,
+.bubble--ai::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  border-radius: 50%;
+  background: var(--bubble-ai-bg);
+  transition: background var(--theme-fade) ease, opacity 300ms ease;
+}
+
+.bubble--ai::before {
+  width: 54px;
+  height: 54px;
+  top: -18px;
+  left: 30px;
+}
+
+.bubble--ai::after {
+  width: 38px;
+  height: 38px;
+  top: -12px;
+  left: 74px;
+}
+
+/* User message: tinted cloud, with a trail of two little "thought" puffs
+   at its pointed corner (bottom-right). */
+.bubble--user {
+  border-radius: var(--radius-user);
+  background: var(--bubble-user-bg);
+  color: var(--bubble-user-text);
+  font-weight: 600;
+  white-space: pre-wrap;
+  box-shadow: var(--bubble-shadow), var(--bubble-glow);
+}
+
+.bubble--user::before,
+.bubble--user::after {
+  content: "";
+  position: absolute;
+  border-radius: 50%;
+  background: var(--trail-color, #fde3e9);
+}
+
+.bubble--user::before {
+  width: 14px;
+  height: 14px;
+  right: -10px;
+  bottom: -8px;
+}
+
+.bubble--user::after {
+  width: 8px;
+  height: 8px;
+  right: -20px;
+  bottom: -18px;
+}
+
+[data-theme="night"] .bubble--user {
+  --trail-color: rgba(245, 169, 184, 0.45);
+  border: 1px solid rgba(125, 216, 251, 0.25);
+}
+
+/* Night: AI bubbles get a faint luminous rim. */
+[data-theme="night"] .bubble--ai {
+  box-shadow: var(--bubble-shadow), var(--bubble-glow), inset 0 1px 0 rgba(125, 216, 251, 0.18);
+}
+
+/* Pro: no puffs, crisp 1px border, the shapes stay softly rounded. */
+[data-theme="pro"] .bubble--ai {
+  box-shadow: var(--bubble-shadow), 0 0 0 1px var(--hairline);
+}
+[data-theme="pro"] .bubble--ai::before,
+[data-theme="pro"] .bubble--ai::after,
+[data-theme="pro"] .bubble--user::before,
+[data-theme="pro"] .bubble--user::after {
+  opacity: 0;
+}
+
+.bubble--error {
+  border-radius: var(--radius-ai);
+  background: var(--error-bg);
+  color: var(--error-text);
+  box-shadow: 0 0 0 1px var(--error-border);
+  white-space: pre-wrap;
+  font-weight: 600;
+}
+
+/* ---- 8. Reasoning panel, statistics, typing indicator -------------------- */
+
+.thought {
+  margin: 0 0 12px;
+  border-radius: 18px;
+  background: var(--thought-bg);
+  box-shadow: 0 0 0 1px var(--hairline);
+  overflow: hidden;
+}
+
+.thought summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--text-soft);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;        /* hide the default triangle... */
+}
+
+.thought summary::-webkit-details-marker {
+  display: none;
+}
+
+.thought summary::before {
+  /* ...and draw our own chevron, which rotates when the panel opens. */
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 240ms var(--ease-soft);
+}
+
+.thought[open] summary::before {
+  transform: rotate(45deg);
+}
+
+.thought.is-thinking summary {
+  color: var(--accent-ink);
+}
+
+.thought-text {
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 10px 14px 12px;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  line-height: 1.6;
+  color: var(--thought-text);
+  white-space: pre-wrap;
+}
+
+.stats {
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-faint);
+}
+
+/* "Typing" indicator: three mini clouds bouncing one after the other. */
+.typing {
+  display: inline-flex;
+  gap: 6px;
+  padding: 6px 2px;
+}
+
+.typing span {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--brand-blue);
+  animation: typing-bounce 1.1s var(--ease-soft) infinite;
+}
+
+.typing span:nth-child(2) {
+  background: color-mix(in srgb, var(--brand-blue) 50%, var(--brand-pink));
+  animation-delay: 0.15s;
+}
+
+.typing span:nth-child(3) {
+  background: var(--brand-pink);
+  animation-delay: 0.3s;
+}
+
+[data-theme="night"] .typing span {
+  box-shadow: 0 0 10px currentColor;
+  color: var(--brand-blue);
+}
+
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.55; }
+  30% { transform: translateY(-7px); opacity: 1; }
+}
+
+/* A bubble waiting for the first token floats gently in place. */
+.bubble.is-waiting {
+  animation: bubble-float 2.6s ease-in-out infinite;
+}
+
+@keyframes bubble-float {
+  50% { transform: translateY(-4px); }
+}
+
+/* ---- 9. Welcome screen --------------------------------------------------- */
+
+.welcome {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: clamp(24px, 8vh, 80px) 12px 12px;
+  animation: float-in 800ms var(--ease-soft) both;
+}
+
+.welcome-mascot {
+  width: clamp(120px, 22vw, 170px);
+  animation: mascot-float 5s ease-in-out infinite;
+}
+
+.welcome-title {
+  margin: 18px 0 6px;
+  font-size: clamp(1.6rem, 4vw, 2.3rem);
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+
+.welcome-subtitle {
+  margin: 0 0 26px;
+  max-width: 460px;
+  color: var(--text-soft);
+  font-weight: 600;
+}
+
+.suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  max-width: 640px;
+}
+
+.suggestion {
+  padding: 10px 18px;
+  border-radius: 22px 26px 24px 18px;
+  background: var(--surface-strong);
+  box-shadow: var(--bubble-shadow), 0 0 0 1px var(--hairline);
+  font-size: 0.88rem;
+  font-weight: 700;
+  color: var(--text-soft);
+  transition: transform 260ms var(--ease-soft), color 200ms ease;
+  animation: float-in 700ms var(--ease-soft) both;
+}
+
+.suggestion:nth-child(2) { animation-delay: 80ms; }
+.suggestion:nth-child(3) { animation-delay: 160ms; }
+
+.suggestion:hover {
+  transform: translateY(-3px) rotate(-1deg);
+  color: var(--accent-ink);
+}
+
+[data-theme="night"] .suggestion:hover {
+  text-shadow: 0 0 12px rgba(125, 216, 251, 0.6);
+}
+
+[data-theme="pro"] .welcome-mascot {
+  animation: none;
+}
+
+/* ---- 10. Composer -------------------------------------------------------- */
+
+.composer-wrap {
+  padding: 8px clamp(12px, 3vw, 28px) max(14px, env(safe-area-inset-bottom));
+}
+
+.composer {
+  max-width: 860px;
+  margin: 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  padding: 8px 8px 8px 22px;
+  border-radius: 30px 34px 32px 28px;
+  background: var(--input-bg);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--input-shadow);
+  transition: box-shadow 300ms ease, background var(--theme-fade) ease, transform 300ms var(--ease-soft);
+}
+
+/* The whole cloud lights up when the text area has the focus. */
+.composer:focus-within {
+  box-shadow: var(--input-shadow), var(--focus-ring);
+  transform: translateY(-2px);
+}
+
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  max-height: 192px;
+  padding: 10px 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+/* The ring is drawn on the whole composer (see :focus-within above). */
+.composer-input:focus-visible {
+  box-shadow: none;
+}
+
+.composer-input::placeholder {
+  color: var(--text-faint);
+}
+
+.send-btn {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  color: var(--send-text);
+  background: var(--send-bg);
+  box-shadow: var(--send-glow);
+  transition: transform 260ms var(--ease-soft), opacity 200ms ease;
+}
+
+.send-btn:hover {
+  transform: translateY(-2px) rotate(-8deg) scale(1.06);
+}
+
+.send-btn:active {
+  transform: scale(0.92);
+}
+
+.send-btn:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.composer-hint {
+  margin: 8px 0 0;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+@media (max-width: 520px) {
+  .composer-hint { display: none; }
+  .bubble { max-width: 92%; padding: 14px 18px; }
+}
+
+/* ---- 11. Animations and reduced motion ----------------------------------- */
+
+/* Every new message rises softly into place, like a cloud drifting in. */
+@keyframes float-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Circular "theme reveal" (View Transitions API, see js/theme.js): we
+   disable the default cross-fade so only our clip-path animation runs. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/* Users who ask their OS for less motion (vestibular disorders, epilepsy,
+   preference) get a still interface: RGAA criterion 13.8 / WCAG 2.3.3.
+   js/sky.js also checks this setting and draws a static starry sky. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .drift-cloud {
+    display: none;
+  }
+}

@@ -28,7 +28,7 @@ document or answer ever leaves the machine.
 
 ## Features
 
-**Available (v0.3)**
+**Available (v0.4)**
 
 - 💬 **Chat with a local LLM** (default: Qwen 3.8 27B, Q4_K_M quantization) with the
   answer streamed token by token.
@@ -46,6 +46,12 @@ document or answer ever leaves the machine.
 - 📊 **Generation metrics** saved per answer (tokens, duration, tokens/s).
 - 🩺 **Health check** of the AI engine and the database (status dot in the UI).
 - 📱 **Responsive UI** (desktop sidebar / mobile off-canvas menu).
+- ☁️ **Own visual identity**: a kawaii cloud mascot, cloud-shaped chat bubbles and
+  **three themes**: *Ciel de Jour* (living dawn sky with drifting clouds),
+  *Ciel de Nuit* (twinkling star field with parallax and shooting stars) and
+  *Mode Pro* (clean, minimal). Switch with a circular reveal animation; the
+  choice is remembered. Respects the OS "reduce motion" setting.
+- 🔒 **Zero third-party request**: libraries and fonts are served locally.
 
 **Planned**: authentication, document upload and RAG (the model answers using my
 own files), deployment pipeline. See the [Roadmap](#roadmap).
@@ -117,7 +123,8 @@ UUIDs...) are explained in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | Migrations | **Alembic** | Versioned, reversible database schema changes |
 | Database | **PostgreSQL 18** + pgvector | Relational integrity; vector search for future RAG |
 | AI engine | **Ollama** (ROCm container) | Runs GGUF models on the AMD GPU |
-| Front-end | HTML + vanilla JS + Tailwind CSS | No build step, lightweight |
+| Front-end | HTML + vanilla JS + hand-written CSS (design tokens, 3 themes), Canvas 2D | No build step, no framework, no CDN |
+| Font | Nunito (variable, vendored in `static/fonts/`) | Rounded and friendly, matches the cloud identity |
 | Markdown | marked 15 + DOMPurify 3 + highlight.js 11 (vendored in `static/vendor/`) | Formatted answers, XSS-safe, no CDN |
 | Containers | Podman + podman-compose | Rootless containers on an immutable OS |
 | Tests | pytest, pytest-asyncio, httpx | Integration tests against a real test database |
@@ -264,7 +271,7 @@ and nothing is saved.
 ## Tests
 
 ```bash
-venv/bin/pytest -v           # 33 tests, < 1 second, no GPU needed
+venv/bin/pytest -v           # 35 tests, < 1 second, no GPU needed
 venv/bin/ruff check .        # lint (incl. security rules)
 venv/bin/ruff format --check .
 ```
@@ -298,7 +305,10 @@ NuageLibre/
 │   └── repositories/           # data access layer
 │       └── conversation_repository.py
 ├── static/
-│   ├── index.html              # web UI (single page)
+│   ├── index.html              # web UI structure (single page)
+│   ├── css/                    # themes.css (tokens + 3 themes), app.css, markdown.css
+│   ├── js/                     # app.js (chat), theme.js (switcher), sky.js (animated skies)
+│   ├── fonts/                  # Nunito woff2, served locally (+ licence, SHA256SUMS)
 │   └── vendor/                 # pinned third-party JS/CSS (+ README, SHA256SUMS)
 ├── migrations/                 # Alembic: versioned schema changes
 ├── db/init/01-create-roles.sh  # PostgreSQL roles & privileges bootstrap
@@ -326,7 +336,8 @@ Measures implemented so far (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 | Secrets leaked in Git | Passwords only in `.env` (git-ignored, `chmod 600`); `.env.example` template |
 | XSS via model output | Markdown converted by marked then sanitised by DOMPurify (scripts, event handlers, `javascript:` links removed); every other text inserted with `textContent` |
 | Arbitrary model name sent by the client | Allow-list: the model must be installed and able to chat, else 422 |
-| Compromised CDN / supply chain | Front-end libraries vendored and pinned, with SHA-256 checksums |
+| Compromised CDN / supply chain | Front-end libraries and fonts vendored and pinned, with SHA-256 checksums |
+| Tracking by third-party servers | The UI loads nothing from the internet (no CDN, no Google Fonts); enforced by `T-SEC-04` |
 | Reverse tabnabbing via links in answers | Links forced to `target="_blank" rel="noopener noreferrer"` |
 | Malformed / oversized input | Pydantic validation (types, UUID format, lengths), 413 on oversize |
 | Id enumeration | Random UUIDv4 primary keys instead of sequential integers |
@@ -335,7 +346,7 @@ Measures implemented so far (details in [docs/ARCHITECTURE.md](docs/ARCHITECTURE
 | GPU out-of-memory | Q4_K_M model + explicit `num_ctx` + bounded history |
 
 Known gaps, next on the roadmap: **no user authentication yet** (access is
-currently protected only by the Tailscale network), Tailwind loaded from a CDN.
+currently protected only by the Tailscale network).
 
 ---
 
@@ -344,10 +355,11 @@ currently protected only by the Tailscale network), Tailwind loaded from a CDN.
 - [x] v0.1 — Minimal chat with Ollama, streaming
 - [x] v0.2 — Layered architecture, PostgreSQL persistence, migrations, tests
 - [x] v0.3 — Model selector, Markdown rendering with syntax highlighting
-- [ ] v0.4 — Authentication (users table, Argon2 password hashing, sessions/JWT)
-- [ ] v0.5 — Document upload + RAG (text extraction, embeddings in pgvector, sources cited)
-- [ ] v0.6 — Local Tailwind build, accessibility audit (RGAA), LaTeX math rendering
-- [ ] v0.7 — Containerised app, CI pipeline (GitHub Actions: lint, tests, image build)
+- [x] v0.4 — Visual identity: mascot, cloud bubbles, 3 themes (day / night / pro), no CDN
+- [ ] v0.5 — Authentication (users table, Argon2 password hashing, sessions/JWT)
+- [ ] v0.6 — Document upload + RAG (text extraction, embeddings in pgvector, sources cited)
+- [ ] v0.7 — Accessibility audit (RGAA), LaTeX math rendering
+- [ ] v0.8 — Containerised app, CI pipeline (GitHub Actions: lint, tests, image build)
 
 ---
 
