@@ -115,6 +115,10 @@
 
 .markdown pre code {
   display: block;
+  /* Light text on the dark block. Needed while the answer is streaming:
+     highlight.js only colours the code once the answer is complete, and
+     without this the text would inherit the dark colour of the light themes. */
+  color: #e6edf3;
   padding: 1em 1.1em;
   background: transparent;
   font-family: var(--font-mono);
@@ -182,3 +186,22 @@
 
 .markdown th:first-child { border-top-left-radius: 14px; }
 .markdown th:last-child { border-top-right-radius: 14px; }
+
+/* ---- Maths (KaTeX) ---------------------------------------------------------
+   KaTeX inherits the text colour, so formulas follow the three themes. */
+.markdown .katex {
+  font-size: 1.08em;       /* KaTeX's default 1.21em looks too big next to Nunito */
+}
+
+/* Display formulas: centred, and they scroll sideways instead of overflowing
+   the bubble on a phone (long equations are common). */
+.markdown .math-block {
+  margin: 0.9em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2em 0;
+}
+
+.markdown .katex-display {
+  margin: 0;
+}

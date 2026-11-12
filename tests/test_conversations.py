@@ -95,11 +95,12 @@ async def test_front_end_assets_are_served(client):
 async def test_page_loads_nothing_from_the_internet(client):
     """T-SEC-04 (sovereignty): the UI references no third-party server, so
     opening it never leaks the user's IP address or activity to a CDN.
-    Checked on the HTML page and on our own CSS (fonts, @import...)."""
+    Checked on the HTML page and on every stylesheet it links (our own CSS,
+    and vendored CSS such as KaTeX's, which loads fonts with url(...))."""
     page = (await client.get("/")).text
     css = ""
-    for name in ("themes", "app", "markdown"):
-        css += (await client.get(f"/static/css/{name}.css")).text
+    for path in re.findall(r'href="(/static/[^"]+\.css)"', page):
+        css += (await client.get(path)).text
 
     # Any absolute (http://, https://) or protocol-relative (//) URL is external.
     external = re.findall(r'(?:src|href)="((?:https?:)?//[^"]*)"', page)

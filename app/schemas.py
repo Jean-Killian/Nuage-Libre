@@ -16,7 +16,9 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
+
+from app.services.file_policy import can_preview
 
 
 # --- Input -------------------------------------------------------------------
@@ -95,3 +97,28 @@ class HealthOut(BaseModel):
     database: Literal["up", "down"]
     ollama_version: str | None = None
     model: str
+
+
+class FileOut(BaseModel):
+    """One file of the private cloud, as shown in the file manager.
+
+    Deliberately absent: ``file_path`` and ``user_id``. Where the bytes live
+    on the server's disk, and who owns them, are internal details that the
+    browser never needs; not exposing them leaves nothing to tamper with.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    filename: str
+    mime_type: str
+    size: int
+    is_vectorized: bool
+    created_at: datetime
+
+    @computed_field
+    @property
+    def previewable(self) -> bool:
+        """Can the "View" action display it in the browser? Decided by the
+        server's allow-list, so the UI never has to duplicate the rule."""
+        return can_preview(self.mime_type)

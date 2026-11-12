@@ -11,15 +11,24 @@
    Sections
      1. Base and accessibility helpers
      2. Living sky (background layers)
-     3. App layout (sidebar + main column)
+     3. App layout: app bar, split-screen workspace, panels, layout switcher
      4. Brand and mascot
-     5. Sidebar contents
-     6. Top bar: model menu, status, theme switcher
+     5. Conversation history (sidebar / drawer of the chat panel)
+     6. Chat header: model menu, status, RAG switch; theme switcher
      7. Messages: cloud bubbles
      8. Reasoning panel, statistics, typing indicator
      9. Welcome screen
     10. Composer (message input)
     11. Animations and reduced motion
+
+   The file manager (left panel) has its own stylesheet: css/files.css.
+
+   Responsive strategy: media queries (@media) react to the size of the
+   SCREEN; container queries (@container) react to the size of a PANEL.
+   In split-screen the chat panel is half a 27-inch monitor or half a
+   laptop: only its own width tells how much room the chat really has, so
+   everything inside a panel uses container queries and "cqi" units
+   (1cqi = 1 % of the panel's width).
    ========================================================================== */
 
 /* ---- 1. Base and accessibility helpers ----------------------------------- */
@@ -288,13 +297,91 @@ button {
     linear-gradient(180deg, #fafbfc 0%, #f4f5f7 100%);
 }
 
-/* ---- 3. App layout ------------------------------------------------------- */
+/* ---- 3. App layout --------------------------------------------------------
+
+     ┌─────────── app bar: brand · layout switcher · themes ────────────┐
+     │ ┌─ files panel (cloud) ─┐ ┌─ chat panel ──────────────────────┐ │
+     │ │ drop zone, file list  │ │ (history) │ header, messages, input │ │
+     │ └───────────────────────┘ └───────────────────────────────────┘ │
+     └──────────────────────────────────────────────────────────────────┘ */
 
 .app {
+  --gutter: clamp(10px, 1.8vw, 22px);
   position: relative;
   z-index: 1;               /* above the sky */
-  display: flex;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100dvh;           /* dvh: correct height on mobile with browser bars */
+}
+
+.appbar {
+  display: grid;
+  /* 1fr | auto | 1fr: the layout switcher stays exactly centred whatever
+     the widths of the brand and of the theme switcher. */
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 12px var(--gutter);
+}
+
+/* Workspace: a grid of two columns, one per panel. Their widths follow the
+   data-view attribute of <html> (set before the first paint by the inline
+   script of index.html, then by js/layout.js):
+
+       split -> 1fr 1fr      chat -> 0fr 1fr      files -> 1fr 0fr
+
+   Browsers can animate between "fr" values, so a panel glides shut and
+   the other one grows into the space, instead of jumping. */
+.workspace {
+  --panel-gap: clamp(10px, 1.4vw, 18px);
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: var(--panel-gap);
+  min-height: 0;
+  padding: 0 var(--gutter) var(--gutter);
+  transition: grid-template-columns 560ms var(--ease-out), column-gap 560ms var(--ease-out);
+}
+
+[data-view="chat"] .workspace {
+  grid-template-columns: 0fr 1fr;
+  column-gap: 0px;
+}
+
+[data-view="files"] .workspace {
+  grid-template-columns: 1fr 0fr;
+  column-gap: 0px;
+}
+
+.panel {
+  position: relative;
+  /* overflow: hidden also sets the panel's minimum width to 0, which is
+     what allows a "0fr" column to really close. */
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  transition: opacity 360ms ease 140ms, visibility 0s;
+}
+
+/* A hidden panel fades out quickly, then stops being rendered once the
+   width animation is over (same technique as the sky layers). js/layout.js
+   also makes it `inert`: no focus, no click, ignored by screen readers. */
+.panel.is-collapsed {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 220ms ease, visibility 0s linear 560ms;
+}
+
+/* While a panel shrinks to 0, its content keeps a sensible minimum width:
+   it is clipped and slides away instead of being squashed into a column of
+   one word per line during the animation. */
+.panel-inner {
+  height: 100%;
+  min-width: 340px;
+}
+
+@media (max-width: 899px) {
+  /* Small screens show one panel at a time (no split): nothing to protect. */
+  .panel-inner { min-width: 0; }
 }
 
 .main {
@@ -304,17 +391,85 @@ button {
   flex-direction: column;
 }
 
+/* Layout switcher: three buttons of equal width and a gradient "blob" that
+   slides under the selected one. The blob's position is derived in CSS from
+   <html data-view>, so it is already right on the very first paint. */
+.view-switcher {
+  position: relative;
+  justify-self: center;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;   /* equal widths: the blob moves by its own width */
+  gap: 0;
+}
+
+.view-indicator {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  left: 5px;
+  width: calc((100% - 10px) / 3);
+  border-radius: var(--radius-pill);
+  background: var(--send-bg);
+  box-shadow: var(--send-glow);
+  transition: transform 480ms var(--ease-soft), background var(--theme-fade) ease;
+}
+
+[data-view="files"] .view-indicator { transform: translateX(0); }
+[data-view="split"] .view-indicator { transform: translateX(100%); }
+[data-view="chat"] .view-indicator { transform: translateX(200%); }
+
+.view-option {
+  position: relative;       /* above the indicator */
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  font-size: 0.84rem;
+  font-weight: 800;
+  color: var(--text-faint);
+  transition: color 300ms ease, transform 240ms var(--ease-soft);
+}
+
+.view-option:hover {
+  color: var(--text);
+  transform: scale(1.04);
+}
+
+.view-option[aria-checked="true"] {
+  color: var(--send-text);
+}
+
+@media (max-width: 899px) {
+  /* No room for two panels: the "split" choice is not offered. */
+  .view-option[data-view-value="split"] { display: none; }
+  .view-indicator { width: calc((100% - 10px) / 2); }
+  [data-view="chat"] .view-indicator { transform: translateX(100%); }
+}
+
+@media (max-width: 719px) {
+  .view-label { display: none; }
+  .view-option {
+    width: 40px;
+    padding: 0;
+  }
+}
+
 /* ---- 4. Brand and mascot ------------------------------------------------- */
 
 .brand {
+  justify-self: start;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 6px 18px;
+  gap: 10px;
 }
 
 .brand-mascot {
-  width: 52px;
+  width: 46px;
   flex-shrink: 0;
   animation: mascot-float 5s ease-in-out infinite;
 }
@@ -326,8 +481,11 @@ button {
 }
 
 .brand-name {
-  font-size: 1.3rem;
+  /* An <h1> (the page title for assistive technologies), styled as a logo. */
+  margin: 0;
+  font-size: 1.22rem;
   font-weight: 900;
+  line-height: 1.15;
   letter-spacing: -0.01em;
 }
 
@@ -340,11 +498,17 @@ button {
 }
 
 .brand-tagline {
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
+  white-space: nowrap;
   color: var(--text-faint);
+}
+
+@media (max-width: 559px) {
+  /* Phone: the mascot alone is the logo. */
+  .brand-text { display: none; }
 }
 
 /* The mascot SVG (cloned from <template id="mascot-template">). */
@@ -426,26 +590,65 @@ body.is-generating .brand-mascot {
 [data-theme="pro"] .mascot-blush { opacity: 0; }
 [data-theme="pro"] .brand-mascot { animation: none; }
 
-/* ---- 5. Sidebar ----------------------------------------------------------
-   No hard border: a translucent "frosted glass" panel whose right edge
-   dissolves into the sky. */
+/* ---- 5. Conversation history ---------------------------------------------
+   The history lives INSIDE the chat panel, and its layout depends on the
+   width of that panel (container query), not of the screen:
+
+   - narrow chat panel (split-screen, phone): an off-canvas drawer that
+     slides over the messages, opened by the "history" button;
+   - wide chat panel (chat in full screen): a frosted-glass column beside
+     the messages, always visible. */
+
+.panel--chat {
+  container: chat / inline-size;
+}
+
+.chat-layout {
+  position: relative;
+  display: flex;
+  height: 100%;
+}
 
 .sidebar {
-  width: 290px;
-  flex-shrink: 0;
+  position: absolute;
+  inset: 0 auto 0 0;
+  z-index: 30;
+  width: min(86%, 310px);
   display: flex;
   flex-direction: column;
-  padding: 20px 14px 14px;
-  background: var(--surface);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
-  border-radius: 0 36px 36px 0;
-  transition: background var(--theme-fade) ease, transform 320ms var(--ease-out);
+  padding: 18px 14px 14px;
+  /* Opaque in drawer mode: the panel covers the conversation, and large
+     text behind a translucent panel stayed readable (the frosted-glass
+     blur is not available in every browser, so it cannot be relied on). */
+  background: var(--sky-base);
+  border-radius: 0 32px 32px 0;
+  box-shadow: 0 0 60px rgba(15, 23, 42, 0.35);
+  transform: translateX(-105%);
+  /* Closed = also invisible to the keyboard: without visibility:hidden, Tab
+     would walk through links that are off-screen. visibility switches at
+     the END of the slide-out and at the START of the slide-in. */
+  visibility: hidden;
+  transition: background var(--theme-fade) ease, transform 320ms var(--ease-out),
+    visibility 0s linear 320ms;
+}
+
+.sidebar.is-open {
+  transform: translateX(0);
+  visibility: visible;
+  transition: background var(--theme-fade) ease, transform 320ms var(--ease-out), visibility 0s;
 }
 
 [data-theme="pro"] .sidebar {
-  border-radius: 0;
-  box-shadow: 1px 0 0 var(--hairline);
+  border-radius: 0 16px 16px 0;
+}
+
+.sidebar-title {
+  margin: 4px 8px 8px;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
 }
 
 .new-chat {
@@ -575,42 +778,55 @@ body.is-generating .brand-mascot {
   color: var(--text-faint);
 }
 
+/* Dimmed backdrop behind the open drawer, limited to the chat panel. */
 .overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 20;
-  background: rgba(15, 23, 42, 0.5);
+  border-radius: 28px;
+  background: rgba(15, 23, 42, 0.45);
   -webkit-backdrop-filter: blur(2px);
   backdrop-filter: blur(2px);
 }
 
-/* Mobile: the sidebar slides in from the left, above the content. */
-@media (max-width: 767px) {
+@container chat (min-width: 860px) {
+  /* Wide chat panel: the history becomes a column beside the messages. */
   .sidebar {
-    position: fixed;
-    inset: 0 auto 0 0;
-    z-index: 30;
-    width: min(86vw, 310px);
-    /* Opaque here: the panel covers the conversation, and large white text
-       behind it stayed visible even at 96 % opacity (the frosted-glass blur
-       is not available in every browser, so it cannot be relied on). */
-    background: var(--sky-base);
-    box-shadow: 0 0 60px rgba(15, 23, 42, 0.35);
-    transform: translateX(-105%);
+    position: relative;
+    inset: auto;
+    z-index: auto;
+    width: 280px;
+    flex-shrink: 0;
+    transform: none;
+    visibility: visible;
+    background: var(--surface);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+    backdrop-filter: blur(18px) saturate(1.2);
+    border-radius: 32px 38px 36px 28px;
+    box-shadow: none;
   }
-  .sidebar.is-open {
-    transform: translateX(0);
+
+  [data-theme="pro"] .sidebar {
+    border-radius: 16px;
+    box-shadow: 0 0 0 1px var(--hairline);
   }
+
+  /* The drawer controls are useless when the history is always visible.
+     ".topbar" raises the specificity above ".icon-btn { display: grid }",
+     which comes later in this file and would otherwise win. */
+  .overlay { display: none !important; }
+  .topbar .sidebar-toggle,
+  .topbar .new-chat-mini { display: none; }
 }
 
-/* ---- 6. Top bar ----------------------------------------------------------
+/* ---- 6. Chat header and theme switcher ------------------------------------
    No bar at all, visually: just a few pills floating over the sky. */
 
 .topbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px clamp(12px, 3vw, 28px);
+  gap: 8px;
+  padding: 2px clamp(8px, 2.5cqi, 24px) 8px;
 }
 
 .pill {
@@ -637,12 +853,16 @@ body.is-generating .brand-mascot {
   box-shadow: 0 0 0 1px var(--hairline);
 }
 
-.sidebar-toggle {
+.sidebar-toggle,
+.new-chat-mini {
   flex-shrink: 0;
+  transition: transform 240ms var(--ease-soft), color 200ms ease;
 }
 
-@media (min-width: 768px) {
-  .sidebar-toggle { display: none; }
+.sidebar-toggle:hover,
+.new-chat-mini:hover {
+  color: var(--accent-ink);
+  transform: scale(1.06);
 }
 
 .model-pill {
@@ -699,7 +919,7 @@ body.is-generating .brand-mascot {
 .model-select {
   appearance: none;
   min-width: 0;
-  max-width: min(46vw, 340px);
+  max-width: min(42cqi, 340px);
   padding: 8px 34px 8px 12px;
   border: 0;
   border-radius: var(--radius-pill);
@@ -721,7 +941,7 @@ body.is-generating .brand-mascot {
    selected one. Its position is a custom property set by js/theme.js. */
 .theme-switcher {
   position: relative;
-  margin-left: auto;
+  justify-self: end;
   flex-shrink: 0;
   gap: 2px;
 }
@@ -759,12 +979,97 @@ body.is-generating .brand-mascot {
   color: var(--send-text);
 }
 
+/* RAG switch (role="switch"): a small track with a knob, lit with the brand
+   gradient when on. Preparation for v0.7: the choice is remembered, and the
+   status line above the composer says honestly what it does today. */
+.rag-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+  gap: 8px;
+  padding: 5px 14px 5px 6px;
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--text-soft);
+  transition: color 300ms ease, background var(--theme-fade) ease;
+}
+
+.rag-toggle:hover {
+  color: var(--text);
+}
+
+.switch-track {
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 24px;
+  border-radius: var(--radius-pill);
+  background: var(--switch-off-bg);
+  transition: background 300ms ease, box-shadow 300ms ease;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--switch-knob);
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--text) 35%, transparent);
+  transition: transform 380ms var(--ease-soft);
+}
+
+.rag-toggle[aria-checked="true"] {
+  color: var(--text);
+}
+
+.rag-toggle[aria-checked="true"] .switch-track {
+  background: var(--send-bg);
+  box-shadow: var(--send-glow);
+}
+
+.rag-toggle[aria-checked="true"] .switch-knob {
+  transform: translateX(16px);
+}
+
+@container chat (max-width: 560px) {
+  .rag-label-long { display: none; }
+}
+
+/* One line above the composer, shown while RAG is on. */
+.rag-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  max-width: min(100%, 860px);
+  margin: 0 auto 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-strong);
+  box-shadow: 0 0 0 1px var(--hairline);
+  font-size: 0.76rem;
+  font-weight: 700;
+  color: var(--text-soft);
+  animation: float-in 420ms var(--ease-soft) both;
+}
+
+.rag-status::before {
+  content: "";
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--send-bg);
+  box-shadow: var(--send-glow);
+}
+
 /* ---- 7. Messages: cloud bubbles ------------------------------------------ */
 
 .chat {
   flex: 1;
   overflow-y: auto;
-  padding: 10px clamp(12px, 3vw, 28px) 24px;
+  padding: 10px clamp(10px, 3cqi, 28px) 24px;
   /* Messages fade out softly under the top bar instead of being cut. */
   -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 28px);
   mask-image: linear-gradient(180deg, transparent 0, #000 28px);
@@ -1018,13 +1323,13 @@ body.is-generating .brand-mascot {
 }
 
 .welcome-mascot {
-  width: clamp(120px, 22vw, 170px);
+  width: clamp(104px, 22cqi, 170px);
   animation: mascot-float 5s ease-in-out infinite;
 }
 
 .welcome-title {
   margin: 18px 0 6px;
-  font-size: clamp(1.6rem, 4vw, 2.3rem);
+  font-size: clamp(1.45rem, 4.6cqi, 2.3rem);
   font-weight: 900;
   letter-spacing: -0.02em;
   line-height: 1.15;
@@ -1076,7 +1381,7 @@ body.is-generating .brand-mascot {
 /* ---- 10. Composer -------------------------------------------------------- */
 
 .composer-wrap {
-  padding: 8px clamp(12px, 3vw, 28px) max(14px, env(safe-area-inset-bottom));
+  padding: 8px clamp(8px, 3cqi, 28px) max(6px, env(safe-area-inset-bottom));
 }
 
 .composer {
@@ -1156,7 +1461,7 @@ body.is-generating .brand-mascot {
   color: var(--text-faint);
 }
 
-@media (max-width: 520px) {
+@container chat (max-width: 520px) {
   .composer-hint { display: none; }
   .bubble { max-width: 92%; padding: 14px 18px; }
 }

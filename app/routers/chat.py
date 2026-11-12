@@ -5,10 +5,13 @@ calling the service, and turning results or errors into HTTP responses.
 All the actual logic lives in ``app/services/chat_service.py``.
 """
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import get_current_user_id
 from app.config import Settings, get_settings
 from app.database import get_session
 from app.dependencies import get_chat_service
@@ -33,14 +36,16 @@ router = APIRouter(prefix="/api", tags=["chat"])
 )
 async def chat(
     payload: ChatRequest,
+    user_id: uuid.UUID = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
     service: ChatService = Depends(get_chat_service),
     settings: Settings = Depends(get_settings),
 ) -> StreamingResponse:
     """Send a message and receive the model's answer as a live stream.
 
-    - ``conversation_id`` omitted -> a new conversation is created.
-    - ``conversation_id`` given  -> the message is added to that conversation.
+    - ``conversation_id`` omitted -> a new conversation is created for the caller.
+    - ``conversation_id`` given  -> the message is added to that conversation
+      (404 if it does not exist or belongs to another user).
     - ``model`` (optional) -> model to answer with; must be installed.
     """
     if len(payload.message) > settings.max_message_length:
@@ -50,7 +55,7 @@ async def chat(
         )
 
     try:
-        ctx = await service.prepare(session, payload.conversation_id, payload.message, payload.model)
+        ctx = await service.prepare(session, user_id, payload.conversation_id, payload.message, payload.model)
     except ConversationNotFoundError:
         # "from None": the internal exception is an expected case, not a bug;
         # do not chain it to the HTTP error in the logs.

@@ -38,6 +38,13 @@ The client may send the name of the model to use (drop-down menu). It is
 checked against the installed models (``ModelCatalog``, allow-list). When no
 model is sent, an existing conversation continues with the model of its
 latest answer, and a new one uses the default model (``NUAGE_MODEL``).
+
+Ownership
+---------
+Every exchange is made on behalf of a user (``user_id``, provided by
+``app.auth.get_current_user_id``). A new conversation is created for that
+user, and an existing one is only found if it belongs to them: someone
+else's conversation id is answered exactly like an unknown one (404).
 """
 
 import json
@@ -69,6 +76,7 @@ class ChatContext:
     """Everything ``stream_reply`` needs, computed by ``prepare``."""
 
     conversation_id: uuid.UUID
+    user_id: uuid.UUID  # owner of the conversation (the caller)
     is_new: bool
     title: str
     model: str
@@ -122,6 +130,7 @@ class ChatService:
     async def prepare(
         self,
         session: AsyncSession,
+        user_id: uuid.UUID,
         conversation_id: uuid.UUID | None,
         message: str,
         model: str | None = None,
@@ -129,8 +138,9 @@ class ChatService:
         """Validate the request against the database and build the model prompt.
 
         Read-only: nothing is written here (see module docstring).
-        Raises ConversationNotFoundError, UnknownModelError, or OllamaError
-        (Ollama unreachable while checking the requested model).
+        Raises ConversationNotFoundError (unknown id, or not owned by
+        ``user_id``), UnknownModelError, or OllamaError (Ollama unreachable
+        while checking the requested model).
         """
         repo = ConversationRepository(session)
         now = datetime.now(UTC)
@@ -141,6 +151,7 @@ class ChatService:
             # the database.
             return ChatContext(
                 conversation_id=uuid.uuid4(),
+                user_id=user_id,
                 is_new=True,
                 title=make_title(message),
                 model=await self._resolve_model(model, self.settings.model),
@@ -149,7 +160,7 @@ class ChatService:
                 prompt=[{"role": "user", "content": message}],
             )
 
-        conversation = await repo.get(conversation_id)
+        conversation = await repo.get(conversation_id, user_id)
         if conversation is None:
             raise ConversationNotFoundError(str(conversation_id))
 
@@ -164,6 +175,7 @@ class ChatService:
 
         return ChatContext(
             conversation_id=conversation.id,
+            user_id=user_id,
             is_new=False,
             title=conversation.title,
             # Continue with the model of the latest answer unless another
@@ -211,10 +223,14 @@ class ChatService:
                 repo = ConversationRepository(session)
                 if ctx.is_new:
                     repo.add_conversation(
-                        ctx.conversation_id, ctx.title, ctx.model, created_at=ctx.user_created_at
+                        ctx.conversation_id,
+                        ctx.user_id,
+                        ctx.title,
+                        ctx.model,
+                        created_at=ctx.user_created_at,
                     )
                 else:
-                    await repo.touch(ctx.conversation_id, model=ctx.model)
+                    await repo.touch(ctx.conversation_id, ctx.user_id, model=ctx.model)
                 repo.add_message(
                     ctx.conversation_id, "user", ctx.user_message, created_at=ctx.user_created_at
                 )

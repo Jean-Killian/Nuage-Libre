@@ -9,15 +9,22 @@ These rules apply to any AI assistant (Claude, Roo Code, Cline, Aider...) workin
 2. **Respect the layered architecture** (see `docs/ARCHITECTURE.md`):
    - `app/routers/`: HTTP only (validation, status codes). No SQL, no business logic.
    - `app/services/`: business logic. No SQL strings, no HTTP response objects.
-   - `app/repositories/`: the only place that queries the database. Never commits:
-     transactions are decided by the service layer.
+   - `app/repositories/`: the only place that queries the database (and, in
+     `file_storage.py`, the only code that touches the storage folder). Never
+     commits: transactions are decided by the service layer.
+   - **Ownership:** every route gets the caller with
+     `user_id = Depends(get_current_user_id)` (`app/auth.py`), and every query on
+     user-owned data (conversations, files) filters on it. Another user's
+     resource answers 404. Never read `GHOST_USER_ID` directly outside `auth.py`
+     and the tests: authentication (v0.6) will only replace that dependency.
 3. **Local only:** never add a library or API that sends data to the internet.
    All AI and file processing stays on the Bazzite machine.
 4. **Database changes go through Alembic:** edit `app/models.py`, then
    `venv/bin/alembic revision --autogenerate -m "..."`, review the generated
    file, then `venv/bin/alembic upgrade head`. Never edit the schema by hand.
-5. **Security:** parameterised queries only; insert untrusted text in the UI with
-   `textContent`. The only `innerHTML` allowed is `renderMarkdown()` in
+5. **Security:** parameterised queries only; never build a disk path from user
+   input (only from server-generated UUIDs, see `docs/CLOUD_STORAGE.md` §4.2);
+   insert untrusted text in the UI with `textContent`. The only `innerHTML` allowed is `renderMarkdown()` in
    `static/js/app.js`, which sanitises with DOMPurify. Front-end libraries and
    fonts are vendored in `static/vendor/` and `static/fonts/` (no CDN, checked by
    test T-SEC-04). Never commit `.env`.

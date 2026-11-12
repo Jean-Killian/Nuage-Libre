@@ -7,13 +7,18 @@ instantiate their collaborators themselves, which means:
 - each layer only depends on the layer below it, through these functions;
 - tests can swap any piece with ``app.dependency_overrides`` (e.g. replace
   the real Ollama client with a fake one that needs no GPU).
+
+The identity of the caller is provided the same way, by
+``app.auth.get_current_user_id`` (the Ghost User until authentication).
 """
 
 from fastapi import Depends
 
 from app.config import Settings, get_settings
 from app.database import SessionLocal
+from app.repositories.file_storage import FileStorage
 from app.services.chat_service import ChatService
+from app.services.file_service import FileService
 from app.services.model_catalog import ModelCatalog
 from app.services.ollama_client import OllamaClient
 
@@ -35,3 +40,14 @@ def get_chat_service(
     catalog: ModelCatalog = Depends(get_model_catalog),
 ) -> ChatService:
     return ChatService(ollama=ollama, session_factory=SessionLocal, settings=settings, catalog=catalog)
+
+
+def get_file_storage(settings: Settings = Depends(get_settings)) -> FileStorage:
+    return FileStorage(settings.storage_dir)
+
+
+def get_file_service(
+    storage: FileStorage = Depends(get_file_storage),
+    settings: Settings = Depends(get_settings),
+) -> FileService:
+    return FileService(storage=storage, settings=settings)

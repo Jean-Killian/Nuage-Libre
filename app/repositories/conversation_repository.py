@@ -15,6 +15,14 @@ is stored. Routers and services call methods such as
 Transactions: the repository does NOT commit. The caller (service layer)
 decides where a transaction starts and ends, so several repository calls
 can be grouped atomically (all succeed or all are rolled back).
+
+Ownership (multi-user foundation): every method that reads or changes a
+conversation takes the ``user_id`` of the caller and puts it in the WHERE
+clause (``WHERE id = ? AND user_id = ?``). A conversation of another user
+is therefore indistinguishable from a conversation that does not exist:
+the API answers 404, never 403, so it does not even reveal that the id is
+valid. This prevents IDOR attacks (Insecure Direct Object Reference, OWASP
+A01 Broken Access Control): knowing or guessing an id is not enough.
 """
 
 import uuid
@@ -32,21 +40,29 @@ class ConversationRepository:
         self.session = session
 
     # --- Read ----------------------------------------------------------------
-    async def list_recent(self, limit: int = 50) -> list[Conversation]:
-        """Most recently updated conversations first (uses ix_conversations_updated_at).
+    async def list_recent(self, user_id: uuid.UUID, limit: int = 50) -> list[Conversation]:
+        """The user's conversations, most recently updated first.
 
-        Generated SQL (roughly):
-            SELECT ... FROM conversations ORDER BY updated_at DESC LIMIT $1
+        Generated SQL (roughly), answered by ix_conversations_user_id_updated_at:
+            SELECT ... FROM conversations WHERE user_id = $1
+            ORDER BY updated_at DESC LIMIT $2
         """
-        stmt = select(Conversation).order_by(Conversation.updated_at.desc()).limit(limit)
+        stmt = (
+            select(Conversation)
+            .where(Conversation.user_id == user_id)
+            .order_by(Conversation.updated_at.desc())
+            .limit(limit)
+        )
         result = await self.session.scalars(stmt)
         return list(result)
 
-    async def get(self, conversation_id: uuid.UUID) -> Conversation | None:
-        return await self.session.get(Conversation, conversation_id)
+    async def get(self, conversation_id: uuid.UUID, user_id: uuid.UUID) -> Conversation | None:
+        """The conversation if it exists AND belongs to ``user_id``, else None."""
+        stmt = select(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id)
+        return await self.session.scalar(stmt)
 
-    async def get_with_messages(self, conversation_id: uuid.UUID) -> Conversation | None:
-        """Load a conversation and all its messages.
+    async def get_with_messages(self, conversation_id: uuid.UUID, user_id: uuid.UUID) -> Conversation | None:
+        """Load one of the user's conversations and all its messages.
 
         ``selectinload`` fetches the messages in a second query
         (``SELECT ... FROM messages WHERE conversation_id IN (...)``) right
@@ -56,7 +72,7 @@ class ConversationRepository:
         """
         stmt = (
             select(Conversation)
-            .where(Conversation.id == conversation_id)
+            .where(Conversation.id == conversation_id, Conversation.user_id == user_id)
             .options(selectinload(Conversation.messages))
         )
         return await self.session.scalar(stmt)
@@ -66,6 +82,10 @@ class ConversationRepository:
 
         We select the newest rows (ORDER BY created_at DESC LIMIT n) in a
         subquery, then re-sort them oldest-first for the model prompt.
+
+        No user filter here: it is only called by ChatService.prepare()
+        right after ``get(conversation_id, user_id)`` has proved, in the
+        same request, that the conversation belongs to the caller.
         """
         newest = (
             select(Message)
@@ -80,15 +100,27 @@ class ConversationRepository:
 
     # --- Write ---------------------------------------------------------------
     def add_conversation(
-        self, conversation_id: uuid.UUID, title: str, model: str, *, created_at: datetime
+        self,
+        conversation_id: uuid.UUID,
+        user_id: uuid.UUID,
+        title: str,
+        model: str,
+        *,
+        created_at: datetime,
     ) -> Conversation:
-        """Stage a new conversation (sent to the DB at the next flush/commit).
+        """Stage a new conversation owned by ``user_id`` (sent to the DB at
+        the next flush/commit).
 
         ``created_at`` is the time of its first message, so a conversation is
         never dated after its own content.
         """
         conversation = Conversation(
-            id=conversation_id, title=title, model=model, created_at=created_at, updated_at=created_at
+            id=conversation_id,
+            user_id=user_id,
+            title=title,
+            model=model,
+            created_at=created_at,
+            updated_at=created_at,
         )
         self.session.add(conversation)
         return conversation
@@ -127,23 +159,32 @@ class ConversationRepository:
         self.session.add(message)
         return message
 
-    async def touch(self, conversation_id: uuid.UUID, *, model: str) -> None:
-        """Record new activity on a conversation.
+    async def touch(self, conversation_id: uuid.UUID, user_id: uuid.UUID, *, model: str) -> None:
+        """Record new activity on one of the user's conversations.
 
         - ``updated_at = now()`` moves it to the top of the sidebar;
         - ``model`` remembers the model of the latest answer, used by default
           for the next message.
+
+        The ``user_id`` condition is defence in depth: ownership was already
+        checked by ChatService.prepare(), but an UPDATE should never be able
+        to touch another user's row, whoever calls it.
         """
         await self.session.execute(
             update(Conversation)
-            .where(Conversation.id == conversation_id)
+            .where(Conversation.id == conversation_id, Conversation.user_id == user_id)
             .values(updated_at=func.now(), model=model)
         )
 
-    async def delete(self, conversation_id: uuid.UUID) -> bool:
-        """Delete a conversation; its messages go with it (ON DELETE CASCADE).
+    async def delete(self, conversation_id: uuid.UUID, user_id: uuid.UUID) -> bool:
+        """Delete one of the user's conversations; its messages go with it
+        (ON DELETE CASCADE).
 
-        Returns True if a row was actually deleted, False if the id was unknown.
+        Returns True if a row was actually deleted, False if the id is
+        unknown OR belongs to someone else (the caller cannot tell the two
+        apart, which is intended).
         """
-        result = await self.session.execute(delete(Conversation).where(Conversation.id == conversation_id))
+        result = await self.session.execute(
+            delete(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id)
+        )
         return result.rowcount > 0

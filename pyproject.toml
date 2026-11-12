@@ -1,8 +1,8 @@
 # Tool configuration (the app is not packaged; dependencies are in requirements*.txt).
 [project]
 name = "nuage-libre"
-version = "0.2.0"
-description = "Self-hosted AI chat and personal cloud backed by local LLMs."
+version = "0.5.0"
+description = "Self-hosted private cloud and AI chat backed by local LLMs."
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]
@@ -24,4 +24,7 @@ select = ["E", "F", "I", "B", "UP", "S", "ASYNC"]
 ignore = ["B008"]  # FastAPI's Depends() in default arguments is the intended pattern
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]  # assert is the normal way to write pytest tests
+# S101: assert is the normal way to write pytest tests.
+# ASYNC240: tests read the files they uploaded with plain pathlib calls; there
+# are no concurrent requests to protect in a test, unlike in the application.
+"tests/*" = ["S101", "ASYNC240"]

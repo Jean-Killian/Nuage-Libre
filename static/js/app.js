@@ -2,9 +2,11 @@
  * Nuage Libre: chat front-end (vanilla JavaScript, no framework).
  *
  * Responsibilities: talk to the FastAPI back-end (/api/...), display the
- * streamed answers, manage the list of saved conversations and the model
- * menu. Visual concerns live elsewhere: css/ for the look, js/theme.js for
- * the theme switcher, js/sky.js for the animated backgrounds.
+ * streamed answers, manage the list of saved conversations, the model menu
+ * and the RAG switch. Visual concerns live elsewhere: css/ for the look,
+ * js/theme.js for the theme switcher, js/layout.js for the split-screen,
+ * js/sky.js for the animated backgrounds. The file manager (left panel) is
+ * js/files.js.
  *
  * Security rules (XSS = Cross-Site Scripting prevention):
  *
@@ -44,7 +46,7 @@
   /** Return a fresh copy of a <template>'s content (icon, mascot...). */
   const cloneTemplate = (id) => $(id).content.firstElementChild.cloneNode(true);
 
-  // The mascot logo in the sidebar.
+  // Every mascot slot of the page: logo, empty cloud, drag & drop overlay.
   document.querySelectorAll('.js-mascot').forEach((slot) => slot.appendChild(cloneTemplate('mascot-template')));
 
   // ------------------------------------------------------------ rendering
@@ -69,7 +71,8 @@
     mascot.className = 'welcome-mascot';
     mascot.appendChild(cloneTemplate('mascot-template'));
 
-    const title = document.createElement('h1');
+    // h3: the page title (h1) is the brand, the chat panel is an h2.
+    const title = document.createElement('h3');
     title.className = 'welcome-title';
     title.textContent = 'Hello! I am your little cloud.';
 
@@ -185,6 +188,136 @@
   // ------------------------------------------------------------- markdown
   // GFM = GitHub Flavored Markdown (tables, ~~strike~~, task lists...).
   marked.setOptions({ gfm: true, breaks: false });
+
+  // ---------------------------------------------------------------- math
+  /*
+   * LaTeX formulas, rendered with KaTeX (vendored in static/vendor/).
+   *
+   * Models write maths in four notations, all supported:
+   *     $x^2$        \( x^2 \)       -> inline formula, inside a sentence
+   *     $$x^2$$      \[ x^2 \]       -> display formula, centred on its own line
+   *
+   * HOW IT PLUGS INTO THE PIPELINE
+   * We add a small "extension" to marked: custom tokenizers that recognise
+   * the formulas BEFORE marked applies its usual Markdown rules. This order
+   * matters: in "$a_1 * b_1$", Markdown would otherwise turn "_1 * b_" into
+   * italics, and "\(" would lose its backslash (it is a Markdown escape).
+   * The formula is then rendered by KaTeX to HTML, and that HTML goes, with
+   * the rest of the answer, through DOMPurify:
+   *
+   *     Markdown --marked + math extension--> HTML --DOMPurify--> innerHTML
+   *
+   * SECURITY
+   * - KaTeX runs with trust: false, so commands that could create links or
+   *   raw HTML (\href, \url, \htmlClass, \includegraphics...) are refused.
+   * - KaTeX's output is NOT trusted blindly: it is sanitised by DOMPurify
+   *   like everything else (defence in depth). DOMPurify keeps what KaTeX
+   *   needs (span + class/style, MathML, SVG paths) and nothing executable.
+   * - maxSize / maxExpand limit huge sizes and recursive macros, so a
+   *   malicious or buggy formula cannot freeze the browser.
+   * - An invalid formula is shown in red with its source (throwOnError:
+   *   false) instead of breaking the whole answer.
+   *
+   * Avoiding false positives with dollar signs ("it costs $5 and $10"):
+   * like Pandoc, an inline $...$ formula must not start with a space, must
+   * not end with a space, and its closing $ must not be followed by a digit.
+   * One tolerated exception: "$ x^2 $" with a space on BOTH sides.
+   */
+  const MATH_OPTIONS = {
+    throwOnError: false,
+    trust: false,
+    strict: 'ignore',         // accept common non-standard LaTeX without warnings
+    output: 'htmlAndMathml',  // HTML for the eyes, MathML for screen readers
+    maxSize: 20,              // em: caps \rule{1000em}{1000em}-style abuse
+    maxExpand: 500,           // caps recursive macro expansion
+    // Colour of invalid formulas. KaTeX writes it into a style attribute, so
+    // a CSS variable works: the colour follows the theme (KaTeX's default
+    // dark red is unreadable on the night sky).
+    errorColor: 'var(--error-text)',
+  };
+
+  // Streaming re-renders the answer up to 60 times per second: without a
+  // cache, every formula would be re-typeset on every frame. Formulas never
+  // change once complete, so their HTML is remembered (bounded size).
+  const mathCache = new Map();
+  const MATH_CACHE_LIMIT = 500;
+
+  function renderTex(tex, displayMode) {
+    const key = `${displayMode ? 'D' : 'I'}${tex}`;
+    let html = mathCache.get(key);
+    if (html === undefined) {
+      html = katex.renderToString(tex, { ...MATH_OPTIONS, displayMode });
+      if (mathCache.size >= MATH_CACHE_LIMIT) mathCache.delete(mathCache.keys().next().value);
+      mathCache.set(key, html);
+    }
+    return html;
+  }
+
+  // Block formulas: a paragraph made only of $$...$$ or \[...\] (may span lines).
+  const BLOCK_MATH = /^ {0,3}(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\])[ \t]*(?:\n+|$)/;
+  // Inline formulas, tried in this order at the current position.
+  const INLINE_MATH = [
+    { re: /^\$\$([\s\S]+?)\$\$/, display: true },
+    { re: /^\\\[([\s\S]+?)\\\]/, display: true },
+    { re: /^\\\(([\s\S]+?)\\\)/, display: false },
+    // Strict (Pandoc) form: $x$ with no space just inside the dollars.
+    { re: /^\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?!\d)/, display: false },
+    // Spaced form "$ x^2 $", which real models write often (found during the
+    // end-to-end test with qwen3:4b). Spaces on BOTH sides are required, so
+    // prices such as "$5 and $10" are still never taken for a formula.
+    { re: /^\$[ \t]+((?:\\.|[^\\$\n])+?)[ \t]+\$(?!\d)/, display: false },
+  ];
+
+  marked.use({
+    extensions: [
+      {
+        name: 'mathBlock',
+        level: 'block',
+        // Where a block formula could start, so marked stops a paragraph there.
+        start(src) {
+          const match = src.match(/^ {0,3}(?:\$\$|\\\[)/m);
+          return match ? match.index : undefined;
+        },
+        tokenizer(src) {
+          const match = BLOCK_MATH.exec(src);
+          if (!match) return undefined;
+          return { type: 'mathBlock', raw: match[0], text: (match[1] ?? match[2]).trim() };
+        },
+        renderer(token) {
+          return `<div class="math-block">${renderTex(token.text, true)}</div>\n`;
+        },
+      },
+      {
+        name: 'mathInline',
+        level: 'inline',
+        // "\$" is included so that an escaped dollar is left to marked's
+        // escape rule (it then shows a literal "$", not a formula).
+        start(src) {
+          const index = src.search(/\\[$([]|\$/);
+          return index < 0 ? undefined : index;
+        },
+        tokenizer(src) {
+          for (const { re, display } of INLINE_MATH) {
+            const match = re.exec(src);
+            if (match) return { type: 'mathInline', raw: match[0], text: match[1].trim(), display };
+          }
+          return undefined;
+        },
+        renderer(token) {
+          return renderTex(token.text, token.display);
+        },
+      },
+    ],
+  });
+
+  // KaTeX's MathML contains <annotation> holding the TeX source. DOMPurify
+  // does not allow <semantics>/<annotation> (to avoid MathML namespace
+  // tricks) and would remove the tags but KEEP their text, so screen readers
+  // would read the raw TeX after the formula. We empty <annotation> first,
+  // then DOMPurify removes the empty element.
+  DOMPurify.addHook('uponSanitizeElement', (node, data) => {
+    if (data.tagName === 'annotation') node.textContent = '';
+  });
 
   // DOMPurify hook, run on every element it keeps: links open in a new tab,
   // and rel="noopener noreferrer" prevents the opened page from controlling
@@ -428,6 +561,62 @@
     userInput.focus();
   }
   $('new-chat-btn').addEventListener('click', newChat);
+  // Compact copy in the chat header, shown when the history is a drawer.
+  $('new-chat-mini').addEventListener('click', newChat);
+
+  // The layout changed (js/layout.js): a drawer left open would cover the
+  // chat when it comes back, and the latest message should be in view.
+  document.addEventListener('viewchange', (event) => {
+    openSidebar(false);
+    if (event.detail.view !== 'files') scrollToBottom();
+  });
+
+  // ------------------------------------------------------------------ RAG
+  /*
+   * "Use my documents as context" switch: preparation for v0.7.
+   * Today it only records the user's choice and says honestly, in the
+   * status line above the composer, that answers do not use documents yet.
+   * In v0.7 the chat request will carry it, and the server will search the
+   * embeddings of the files marked is_vectorized (pgvector) to add the most
+   * relevant passages to the prompt.
+   */
+  const ragToggle = $('rag-toggle');
+  const ragStatus = $('rag-status');
+  const RAG_STORAGE_KEY = 'nuage-libre:rag';
+  let documentsInMemory = 0;
+
+  const ragEnabled = () => ragToggle.getAttribute('aria-checked') === 'true';
+
+  function updateRagStatus() {
+    if (!ragEnabled()) {
+      ragStatus.hidden = true;
+      return;
+    }
+    ragStatus.textContent = documentsInMemory
+      ? `RAG on · ${documentsInMemory} document${documentsInMemory > 1 ? 's' : ''} in the AI memory, used by answers from v0.7`
+      : 'RAG on · no document in the AI memory yet: answers use the model\'s own knowledge only';
+    ragStatus.hidden = false;
+  }
+
+  function setRag(on, { remember = true } = {}) {
+    ragToggle.setAttribute('aria-checked', String(on));
+    if (remember) {
+      try { localStorage.setItem(RAG_STORAGE_KEY, on ? 'on' : 'off'); } catch { /* not remembered */ }
+    }
+    updateRagStatus();
+  }
+
+  ragToggle.addEventListener('click', () => setRag(!ragEnabled()));
+
+  // Sent by js/files.js each time the list of files changes.
+  document.addEventListener('files:changed', (event) => {
+    documentsInMemory = event.detail.files.filter((f) => f.is_vectorized).length;
+    updateRagStatus();
+  });
+
+  let savedRag = null;
+  try { savedRag = localStorage.getItem(RAG_STORAGE_KEY); } catch { /* storage blocked */ }
+  setRag(savedRag === 'on', { remember: false });
 
   // ----------------------------------------------------------------- chat
   /**

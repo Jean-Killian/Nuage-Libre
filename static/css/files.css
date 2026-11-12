@@ -1,0 +1,532 @@
+/* =============================================================================
+   Nuage Libre: the file manager (private cloud, left panel)
+   =============================================================================
+
+   Same design language as the chat: an organic "cloud bank" of frosted
+   glass floating over the sky, soft asymmetric radii, the brand gradient
+   for primary actions. Like every component, it only uses the design tokens
+   of themes.css, so the three themes apply without a single rule here
+   knowing which theme is active.
+
+   The panel is a CSS container ("files"): its rows adapt to the width of
+   the PANEL (half the screen in split-screen, all of it in full screen),
+   not of the screen.
+
+   Sections
+     1. Panel and header
+     2. Drop zone and drag-over overlay
+     3. Upload queue (progress bars)
+     4. File list
+     5. Empty state and errors
+   ========================================================================== */
+
+/* ---- 1. Panel and header ------------------------------------------------- */
+
+.panel--files {
+  container: files / inline-size;
+  border-radius: var(--radius-panel);
+  background: var(--panel-bg);
+  -webkit-backdrop-filter: blur(20px) saturate(1.25);
+  backdrop-filter: blur(20px) saturate(1.25);
+  box-shadow: var(--panel-shadow), inset 0 0 0 1px var(--panel-border);
+  /* opacity / visibility repeated from .panel (app.css): a "transition"
+     declaration replaces the whole list, it does not add to it. */
+  transition: background var(--theme-fade) ease, box-shadow var(--theme-fade) ease,
+    opacity 360ms ease 140ms, visibility 0s;
+}
+
+.files {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px clamp(12px, 3cqi, 26px) 14px;
+}
+
+.files-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.files-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.files-title {
+  margin: 0;
+  font-size: 1.18rem;
+  font-weight: 900;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.files-summary {
+  margin: 2px 0 0;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.upload-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: var(--radius-pill);
+  font-weight: 800;
+  color: var(--send-text);
+  background: var(--send-bg);
+  box-shadow: var(--send-glow);
+  transition: transform 240ms var(--ease-soft), box-shadow 240ms ease;
+}
+
+.upload-btn:hover {
+  transform: translateY(-2px) scale(1.03);
+}
+
+.upload-btn:active {
+  transform: scale(0.96);
+}
+
+/* ---- 2. Drop zone and drag-over overlay ---------------------------------- */
+
+.dropzone {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+  padding: 14px 20px;
+  border: 2px dashed var(--dropzone-border);
+  border-radius: 28px 34px 30px 24px;
+  background: var(--dropzone-bg);
+  text-align: left;
+  transition: background 240ms ease, border-color 240ms ease, transform 300ms var(--ease-soft);
+}
+
+.dropzone:hover,
+.files.is-dragover .dropzone {
+  border-color: var(--accent-ink);
+  background: var(--dropzone-active-bg);
+  transform: translateY(-2px);
+}
+
+.dropzone-icon {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 52px;
+  border-radius: 22px 26px 24px 18px;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--brand-blue) 16%, transparent);
+  transition: transform 300ms var(--ease-soft);
+}
+
+.dropzone:hover .dropzone-icon {
+  transform: translateY(-3px) rotate(-4deg);
+}
+
+.dropzone-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.dropzone-title {
+  font-size: 0.98rem;
+  font-weight: 900;
+  color: var(--text);
+}
+
+.dropzone-hint {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+/* "Drop" for a mouse, "Tap" for a finger (pointer: coarse = touchscreen). */
+.for-touch { display: none; }
+
+@media (pointer: coarse) {
+  .for-mouse { display: none; }
+  .for-touch { display: inline; }
+}
+
+/* Covers the whole panel while files are dragged over it. pointer-events:
+   none keeps the drag events flowing to the panel underneath. */
+.drop-overlay {
+  position: absolute;
+  inset: 8px;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  border: 3px dashed var(--accent-ink);
+  border-radius: var(--radius-panel);
+  background: color-mix(in srgb, var(--sky-base) 90%, transparent);
+  box-shadow: var(--send-glow);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transform: scale(0.98);
+  transition: opacity 200ms ease, transform 320ms var(--ease-soft), visibility 0s linear 200ms;
+}
+
+.files.is-dragover .drop-overlay {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity 200ms ease, transform 320ms var(--ease-soft), visibility 0s;
+}
+
+.drop-overlay-mascot {
+  width: clamp(96px, 24cqi, 140px);
+  /* The cloud bounces with excitement, ready to catch the files. */
+  animation: mascot-think 0.9s var(--ease-soft) infinite alternate;
+}
+
+.drop-overlay-text {
+  font-size: 1.1rem;
+  font-weight: 900;
+  color: var(--text);
+}
+
+/* ---- 3. Upload queue ----------------------------------------------------- */
+
+.upload-queue {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.upload-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 10px 12px;
+  border-radius: 20px 24px 22px 18px;
+  background: var(--surface-strong);
+  box-shadow: 0 0 0 1px var(--hairline);
+  animation: float-in 480ms var(--ease-soft) both;
+}
+
+.upload-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress {
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--progress-track);
+  overflow: hidden;
+}
+
+/* scaleX() rather than width: transform is composited by the GPU, the
+   layout of the page is not recomputed at every progress event. */
+.progress-bar {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--send-bg);
+  transform: scaleX(var(--progress, 0));
+  transform-origin: left center;
+  transition: transform 200ms linear;
+}
+
+/* All bytes sent, the server is writing to disk and indexing: the full bar
+   breathes until the answer arrives. */
+.upload-item.is-finishing .progress-bar {
+  animation: progress-breathe 1.1s ease-in-out infinite alternate;
+}
+
+@keyframes progress-breathe {
+  from { opacity: 1; }
+  to { opacity: 0.45; }
+}
+
+.upload-status {
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+.upload-item.is-error {
+  background: var(--error-bg);
+  box-shadow: 0 0 0 1px var(--error-border);
+}
+
+.upload-item.is-error .upload-status,
+.upload-item.is-error .file-name {
+  color: var(--error-text);
+}
+
+/* ---- 4. File list -------------------------------------------------------- */
+
+.files-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -8px;
+  padding: 2px 8px 8px;
+}
+
+.file-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.file-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 8px 9px 10px;
+  border-radius: 20px 24px 22px 18px;
+  transition: background 200ms ease, box-shadow 200ms ease, transform 240ms var(--ease-soft);
+}
+
+/* Only files that just arrived float in (not the whole list at each refresh). */
+.file-item.is-new {
+  animation: float-in 560ms var(--ease-soft) both;
+}
+
+.file-item:hover,
+.file-item:focus-within {
+  background: var(--surface-strong);
+  box-shadow: var(--bubble-shadow);
+}
+
+.file-item:hover {
+  transform: translateX(3px);
+}
+
+/* File type badge: a small organic blob showing the extension, tinted by
+   family (images pink, documents blue, media violet, archives amber). The
+   ink colours are the contrast-checked "ink" tokens, on a 10 % tint. */
+.file-icon {
+  --kind-ink: var(--text-soft);
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 40px;
+  border-radius: 16px 18px 16px 12px;
+  font-size: 0.64rem;
+  font-weight: 900;
+  letter-spacing: 0.04em;
+  color: var(--kind-ink);
+  background: color-mix(in srgb, var(--kind-ink) 10%, transparent);
+}
+
+.file-icon[data-kind="image"] { --kind-ink: var(--accent-ink-pink); }
+.file-icon[data-kind="document"] { --kind-ink: var(--accent-ink); }
+.file-icon[data-kind="media"] { --kind-ink: var(--accent-ink-violet); }
+.file-icon[data-kind="archive"] { --kind-ink: var(--accent-ink-amber); }
+
+.file-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.9rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.file-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px 8px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Where the file stands regarding the AI memory (RAG). */
+.file-badge {
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  font-size: 0.68rem;
+  font-weight: 800;
+  color: var(--text-soft);
+  background: var(--hairline);
+}
+
+.file-badge.is-memory {
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-ink) 10%, transparent);
+}
+
+.file-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.file-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 36px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: var(--text-soft);
+  text-decoration: none;
+  white-space: nowrap;
+  transition: color 160ms ease, background 160ms ease, transform 240ms var(--ease-soft);
+}
+
+.file-action:hover {
+  color: var(--accent-ink);
+  background: var(--surface-hover);
+  transform: translateY(-1px);
+}
+
+/* "Add to AI memory": visible but not available yet (v0.7). aria-disabled
+   (not the disabled attribute) keeps it focusable, so keyboard and screen
+   reader users can discover it and hear why it is unavailable. */
+.file-action[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.file-action[aria-disabled="true"]:hover {
+  color: var(--text-soft);
+  background: transparent;
+  transform: none;
+}
+
+.file-action--memory {
+  border: 1.5px dashed var(--dropzone-border);
+}
+
+/* Medium panel (split-screen): "View" and "Download" keep only their icons
+   (their tooltip and accessible name still say what they do), so the file
+   name and its details get the room. "Add to AI memory" keeps its words:
+   it announces the RAG feature to come. */
+@container files (max-width: 820px) {
+  .file-action:not(.file-action--memory) .file-action-label { display: none; }
+  .file-action:not(.file-action--memory) {
+    width: 36px;
+    padding: 0;
+  }
+}
+
+/* Narrow panel: every action is an icon. */
+@container files (max-width: 560px) {
+  .file-action-label { display: none; }
+  .file-action {
+    width: 36px;
+    padding: 0;
+  }
+}
+
+@container files (max-width: 420px) {
+  .dropzone-hint { display: none; }
+  .file-icon {
+    width: 38px;
+    height: 36px;
+  }
+  /* "Cloud only" is the default state: on a phone, only the exception
+     ("In AI memory") is worth a line of its own. */
+  .file-badge:not(.is-memory) { display: none; }
+}
+
+/* ---- 5. Empty state and errors ------------------------------------------- */
+
+.files-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: clamp(20px, 7cqi, 56px) 12px;
+  animation: float-in 700ms var(--ease-soft) both;
+}
+
+.files-empty-mascot {
+  width: clamp(92px, 22cqi, 132px);
+  animation: mascot-float 5s ease-in-out infinite;
+}
+
+.files-empty-title {
+  margin: 14px 0 4px;
+  font-size: 1.1rem;
+  font-weight: 900;
+}
+
+.files-empty-text {
+  max-width: 340px;
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 600;
+  color: var(--text-soft);
+}
+
+.files-notice {
+  margin: 0;
+  padding: 8px 14px;
+  border-radius: 18px 22px 20px 16px;
+  background: var(--surface-strong);
+  box-shadow: 0 0 0 1px var(--hairline);
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-soft);
+  animation: float-in 420ms var(--ease-soft) both;
+}
+
+.files-error {
+  margin: 10px 0 0;
+  padding: 10px 14px;
+  border-radius: 18px;
+  background: var(--error-bg);
+  color: var(--error-text);
+  box-shadow: 0 0 0 1px var(--error-border);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+/* Pro theme: quiet and still, like the rest of the interface. */
+[data-theme="pro"] .files-empty-mascot,
+[data-theme="pro"] .drop-overlay-mascot {
+  animation: none;
+}
+
+[data-theme="pro"] .file-item:hover {
+  transform: none;
+}
+
+[data-theme="pro"] .drop-overlay {
+  box-shadow: none;
+}

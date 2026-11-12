@@ -7,13 +7,18 @@ Test strategy
   (``nuage_libre_test``, separate from the real data).
 - The only thing replaced is Ollama, by ``FakeOllama``: tests run without a
   GPU, in milliseconds, and always get the same answer (deterministic).
-- Every test starts with empty tables, so tests never depend on each other.
+- Uploaded files go to a temporary folder created for the test session,
+  never to the real storage folder on the Lexar disk.
+- Every test starts with empty tables and an empty storage folder, so tests
+  never depend on each other.
 
 Run:  venv/bin/pytest -v
 """
 
 import json
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -34,6 +39,10 @@ if not TEST_DB_URL.rsplit("/", 1)[-1].endswith("_test"):
     # Safety net: refuse to run (and wipe tables) on a non-test database.
     raise RuntimeError(f"Refusing to run tests on a database not ending in '_test': {TEST_DB_URL}")
 os.environ["NUAGE_DATABASE_URL"] = TEST_DB_URL
+# Same idea for the private cloud: a fresh temporary folder (removed at the
+# end of the session), so tests can never write to, or wipe, real files.
+TEST_STORAGE_DIR = Path(tempfile.mkdtemp(prefix="nuage-libre-test-storage-"))
+os.environ["NUAGE_STORAGE_DIR"] = str(TEST_STORAGE_DIR)
 
 import httpx  # noqa: E402  (imports below must come after the environment setup)
 import pytest  # noqa: E402
@@ -41,6 +50,7 @@ from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
+from app.auth import GHOST_USER_ID, get_current_user_id  # noqa: E402
 from app.config import get_settings  # noqa: E402
 from app.database import engine  # noqa: E402
 from app.dependencies import get_ollama_client  # noqa: E402
@@ -101,13 +111,34 @@ def migrated_database():
     os.environ["ALEMBIC_DATABASE_URL"] = TEST_MIGRATION_URL
     command.upgrade(Config(str(ROOT / "alembic.ini")), "head")
     yield
+    shutil.rmtree(TEST_STORAGE_DIR, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)
 async def clean_tables():
-    """Empty the tables before each test (messages go with ON DELETE CASCADE)."""
+    """Reset the database before each test.
+
+    Order matters because of the foreign keys: files first (ON DELETE
+    RESTRICT would refuse to delete their owner), then conversations
+    (messages follow by CASCADE), then every user except the Ghost User,
+    who is part of the schema (seeded by the migration).
+    """
     async with engine.begin() as conn:
+        await conn.execute(text("DELETE FROM files"))
         await conn.execute(text("DELETE FROM conversations"))
+        await conn.execute(text("DELETE FROM users WHERE id <> :ghost"), {"ghost": GHOST_USER_ID})
+    yield
+
+
+@pytest.fixture(autouse=True)
+def clean_storage():
+    """Empty the temporary storage folder before each test (a plain, sync
+    fixture: blocking file operations do not belong in async code)."""
+    for child in TEST_STORAGE_DIR.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
     yield
 
 
@@ -143,3 +174,37 @@ async def client(fake_ollama):
 def parse_events(response: httpx.Response) -> list[dict]:
     """Split an NDJSON response body into a list of event dicts."""
     return [json.loads(line) for line in response.text.splitlines() if line.strip()]
+
+
+@pytest.fixture
+def act_as():
+    """Make the API believe the caller is another user: ``act_as(user_id)``.
+
+    It replaces ``get_current_user_id`` exactly as JWT authentication will
+    in v0.6, which proves the routes rely on that single seam.
+    """
+
+    def _act_as(user_id):
+        app.dependency_overrides[get_current_user_id] = lambda: user_id
+
+    yield _act_as
+    app.dependency_overrides.pop(get_current_user_id, None)
+
+
+async def create_user(username: str):
+    """Insert a second user directly in the database and return its id."""
+    async with engine.begin() as conn:
+        return await conn.scalar(
+            text("INSERT INTO users (username) VALUES (:name) RETURNING id"), {"name": username}
+        )
+
+
+async def upload(client, content: bytes = b"hello cloud", name: str = "notes.txt", **headers):
+    """Upload ``content`` the way the web UI does (raw body + X-File-Name)."""
+    from urllib.parse import quote
+
+    return await client.post(
+        "/api/files",
+        content=content,
+        headers={"Content-Type": "application/octet-stream", "X-File-Name": quote(name), **headers},
+    )

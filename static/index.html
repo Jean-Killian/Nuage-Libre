@@ -7,36 +7,51 @@
 
     static/index.html          structure only (this file)
     static/css/themes.css      design tokens + the 3 themes (day / night / pro)
-    static/css/app.css         layout, cloud bubbles, sky, animations
+    static/css/app.css         layout (app bar, split-screen workspace), chat,
+                               cloud bubbles, sky, animations
+    static/css/files.css       the file manager panel (private cloud)
     static/css/markdown.css    typography of the model's Markdown answers
     static/js/theme.js         theme switcher (+ circular reveal animation)
+    static/js/layout.js        view switcher: split-screen / chat / files
     static/js/sky.js           living backgrounds: drifting clouds, starry sky
+    static/js/files.js         file manager: list, drag & drop upload, download
     static/js/app.js           chat logic: API calls, streaming, conversations
-    static/vendor/             pinned third-party libraries (see its README)
+    static/vendor/             pinned third-party libraries: marked, DOMPurify,
+                               highlight.js, KaTeX (see its README)
     static/fonts/              Nunito, served locally (no Google Fonts request)
 
   No build step and no framework: the browser loads these files as they are.
 -->
-<html lang="en" data-theme="day">
+<html lang="en" data-theme="day" data-view="split">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
-  <title>Nuage Libre — Local AI Chat</title>
+  <title>Nuage Libre — Private Cloud &amp; Local AI</title>
   <meta name="theme-color" content="#eef8ff" />
 
-  <!-- Apply the saved theme BEFORE the page is painted. If this waited for
-       js/theme.js (loaded at the end of <body>), a user who chose the night
-       theme would first see a white flash ("FOUC", flash of unstyled
-       content). This tiny script is deliberately inline and synchronous. -->
+  <!-- Apply the saved theme and layout BEFORE the page is painted. If this
+       waited for js/theme.js and js/layout.js (loaded at the end of <body>),
+       a user who chose the night theme would first see a white flash, and a
+       user who chose "chat only" would see the split-screen jump ("FOUC",
+       flash of unstyled content). This tiny script is deliberately inline
+       and synchronous. -->
   <script>
     (function () {
-      var theme = null;
-      try { theme = localStorage.getItem('nuage-libre:theme'); } catch (e) { /* storage blocked */ }
+      var theme = null, view = null;
+      try {
+        theme = localStorage.getItem('nuage-libre:theme');
+        view = localStorage.getItem('nuage-libre:view');
+      } catch (e) { /* storage blocked */ }
       if (theme !== 'day' && theme !== 'night' && theme !== 'pro') {
         // First visit: follow the operating system's light/dark preference.
         theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'night' : 'day';
       }
+      if (view !== 'files' && view !== 'split' && view !== 'chat') view = 'split';
+      // Two panels side by side need room: on a narrow screen (phone),
+      // "split" falls back to the chat alone (same rule as js/layout.js).
+      if (view === 'split' && window.matchMedia('(max-width: 899px)').matches) view = 'chat';
       document.documentElement.dataset.theme = theme;
+      document.documentElement.dataset.view = view;
     })();
   </script>
 
@@ -44,8 +59,12 @@
   <link rel="preload" href="/static/fonts/nunito-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
   <link rel="stylesheet" href="/static/css/themes.css" />
   <link rel="stylesheet" href="/static/css/app.css" />
+  <link rel="stylesheet" href="/static/css/files.css" />
   <link rel="stylesheet" href="/static/css/markdown.css" />
   <link rel="stylesheet" href="/static/vendor/highlight-github-dark.min.css" />
+  <!-- KaTeX: typesetting of LaTeX formulas; its CSS loads the math fonts from
+       static/vendor/fonts/ (relative URLs, nothing from the internet). -->
+  <link rel="stylesheet" href="/static/vendor/katex.min.css" />
 </head>
 <body>
 
@@ -63,9 +82,10 @@
   </svg>
 
   <!-- The mascot: a small kawaii cloud. Defined once in a <template> and
-       cloned by js/app.js wherever it is needed (logo, welcome screen), so
-       the drawing exists in a single place. Shapes: three circles + one
-       rounded rectangle merged into one cloud silhouette, then a face. -->
+       cloned by the scripts wherever it is needed (logo, welcome screen,
+       empty cloud), so the drawing exists in a single place. Shapes: three
+       circles + one rounded rectangle merged into one cloud silhouette,
+       then a face. -->
   <template id="mascot-template">
     <svg class="mascot" viewBox="0 0 120 92" aria-hidden="true" focusable="false">
       <g class="mascot-body">
@@ -86,11 +106,39 @@
     </svg>
   </template>
 
-  <!-- Small icons cloned by js/app.js (no innerHTML needed). -->
+  <!-- Small icons cloned by the scripts (no innerHTML needed). -->
   <template id="icon-trash">
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2"
          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
       <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+    </svg>
+  </template>
+  <template id="icon-eye">
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <path d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7S2.5 12 2.5 12Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  </template>
+  <template id="icon-download">
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <path d="M12 4v11M7 10.5l5 5 5-5M5 20h14" />
+    </svg>
+  </template>
+  <!-- "AI memory": a small brain-cloud with a sparkle. -->
+  <template id="icon-memory">
+    <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <path d="M7.5 18.5a4 4 0 0 1-.9-7.9A5 5 0 0 1 16.4 9a3.8 3.8 0 0 1 .6 7.5" />
+      <path d="M12 12.5v7M9.5 17l2.5 2.5 2.5-2.5" />
+      <path d="M19.5 3v3M18 4.5h3" />
+    </svg>
+  </template>
+  <template id="icon-close">
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4"
+         stroke-linecap="round" aria-hidden="true" focusable="false">
+      <path d="M6 6l12 12M18 6 6 18" />
     </svg>
   </template>
 
@@ -114,114 +162,254 @@
   </div>
 
   <div class="app">
-    <!-- ===================== Sidebar: saved conversations ================== -->
-    <!-- Off-canvas on mobile (opened by the ☰ button), always visible on wide screens. -->
-    <aside id="sidebar" class="sidebar" aria-label="Conversations">
+    <!-- ======================= App bar (global) ============================
+         Brand on the left, layout switcher in the centre, themes on the
+         right: the controls that concern the whole application. -->
+    <header class="appbar">
       <div class="brand">
         <span class="brand-mascot js-mascot"></span>
         <span class="brand-text">
-          <span class="brand-name">Nuage <span class="brand-accent">Libre</span></span>
-          <span class="brand-tagline">Local sovereign AI</span>
+          <h1 class="brand-name">Nuage <span class="brand-accent">Libre</span></h1>
+          <span class="brand-tagline">Private cloud · Local AI</span>
         </span>
       </div>
 
-      <button id="new-chat-btn" type="button" class="new-chat">
-        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"
-             stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14" /></svg>
-        New chat
-      </button>
-
-      <nav class="conversations" aria-label="Saved conversations">
-        <ul id="conversation-list" class="conversation-list"></ul>
-        <p id="empty-list" class="empty-list" hidden>No saved conversations yet.</p>
-      </nav>
-    </aside>
-    <!-- Dimmed backdrop behind the sidebar on mobile; clicking it closes the sidebar. -->
-    <div id="sidebar-overlay" class="overlay" hidden></div>
-
-    <!-- ============================ Main column ============================ -->
-    <div class="main">
-      <header class="topbar">
-        <button id="sidebar-toggle" type="button" class="icon-btn sidebar-toggle"
-                aria-label="Show conversations" aria-controls="sidebar" aria-expanded="false">
-          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
-               stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h11M4 17h16" /></svg>
+      <!-- Layout switcher: a radio group (one layout at a time), same pattern
+           and keyboard support as the theme switcher (js/layout.js). The
+           sliding indicator is positioned by CSS from <html data-view>. -->
+      <div id="view-switcher" class="pill view-switcher" role="radiogroup" aria-label="Layout">
+        <span class="view-indicator" aria-hidden="true"></span>
+        <button type="button" role="radio" class="view-option" data-view-value="files"
+                aria-checked="false" title="Files in full screen">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M7 18.5a4.5 4.5 0 0 1-.6-9 5.5 5.5 0 0 1 10.6-1.3A4.4 4.4 0 0 1 17.5 18.5Z" />
+          </svg>
+          <span class="view-label">Files</span>
         </button>
+        <button type="button" role="radio" class="view-option" data-view-value="split"
+                aria-checked="false" title="Files and chat side by side">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <rect x="3" y="4.5" width="18" height="15" rx="4" />
+            <path d="M12 4.5v15" />
+          </svg>
+          <span class="view-label">Split</span>
+        </button>
+        <button type="button" role="radio" class="view-option" data-view-value="chat"
+                aria-checked="false" title="Chat in full screen">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M5 18.5V7a3 3 0 0 1 3-3h8a3 3 0 0 1 3 3v6a3 3 0 0 1-3 3H8.5Z" />
+            <path d="M9 9h6M9 12h4" />
+          </svg>
+          <span class="view-label">Chat</span>
+        </button>
+      </div>
 
-        <!-- Model menu + health status, grouped in one floating pill. -->
-        <div class="pill model-pill">
-          <!-- Status dot: grey = unknown, green = AI engine + DB up, red = a service is down -->
-          <span id="status-dot" class="status-dot" role="img" aria-label="Checking server status"></span>
-          <label for="model-select" class="sr-only">AI model</label>
-          <span class="select-wrap">
-            <select id="model-select" class="model-select">
-              <option>Loading models…</option>
-            </select>
-          </span>
+      <!-- Theme switcher: a radio group (only one theme at a time). Arrow keys
+           move between options, as for native radio buttons (js/theme.js). -->
+      <div id="theme-switcher" class="pill theme-switcher" role="radiogroup" aria-label="Theme">
+        <span class="theme-indicator" aria-hidden="true"></span>
+        <button type="button" role="radio" class="theme-option" data-theme-value="day"
+                aria-checked="false" title="Ciel de Jour" aria-label="Day sky theme">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" aria-hidden="true" focusable="false">
+            <circle cx="12" cy="12" r="4.2" />
+            <path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" />
+          </svg>
+        </button>
+        <button type="button" role="radio" class="theme-option" data-theme-value="night"
+                aria-checked="false" title="Ciel de Nuit" aria-label="Night sky theme">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
+            <path d="M17 3.5v3M15.5 5h3" />
+          </svg>
+        </button>
+        <button type="button" role="radio" class="theme-option" data-theme-value="pro"
+                aria-checked="false" title="Mode Pro" aria-label="Professional theme">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+            <rect x="3.5" y="7" width="17" height="12.5" rx="3" />
+            <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3.5 12.5h17" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- ===================== Workspace: the two panels =====================
+         CSS grid with two columns whose widths depend on <html data-view>:
+         split = 1fr 1fr, chat = 0fr 1fr, files = 1fr 0fr (animated). A
+         hidden panel is also made `inert` by js/layout.js, so keyboard and
+         screen-reader users cannot wander into something they cannot see. -->
+    <main id="workspace" class="workspace">
+
+      <!-- ================= Left panel: the file manager (cloud) ========== -->
+      <section id="files-panel" class="panel panel--files" aria-labelledby="files-title">
+        <div class="panel-inner files">
+          <header class="files-header">
+            <div class="files-heading">
+              <h2 id="files-title" class="files-title">My cloud</h2>
+              <p id="files-summary" class="files-summary">Loading your files…</p>
+            </div>
+            <button id="upload-btn" type="button" class="upload-btn">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"
+                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                <path d="M12 19V7M6.5 12.5 12 7l5.5 5.5M5 4h14" />
+              </svg>
+              <span>Upload</span>
+            </button>
+            <!-- Native picker, opened by the buttons above and below. -->
+            <input id="file-input" type="file" multiple hidden />
+          </header>
+
+          <!-- Drag & drop is a mouse-only gesture: the drop zone is therefore
+               also a real button that opens the file picker (keyboard and
+               screen-reader alternative, RGAA 7.1). The whole panel accepts
+               drops, not just this zone. -->
+          <button id="dropzone" type="button" class="dropzone" aria-describedby="dropzone-hint">
+            <span class="dropzone-icon" aria-hidden="true">
+              <svg viewBox="0 0 48 40" width="44" height="37" fill="none" stroke="currentColor" stroke-width="2.6"
+                   stroke-linecap="round" stroke-linejoin="round" focusable="false">
+                <path d="M14 33.5a9.5 9.5 0 0 1-1.4-18.9A12 12 0 0 1 35.5 12a8.8 8.8 0 0 1-.9 21.5" />
+                <path d="M24 35V19M18 24.5l6-6 6 6" />
+              </svg>
+            </span>
+            <span class="dropzone-text">
+              <!-- Drag & drop does not exist on a touchscreen: the wording
+                   follows the kind of pointer (css/files.css). -->
+              <span class="dropzone-title">
+                <span class="for-mouse">Drop your files here</span>
+                <span class="for-touch">Tap to add files</span>
+              </span>
+              <span id="dropzone-hint" class="dropzone-hint">or click to browse · stored on your own server, nowhere else</span>
+            </span>
+          </button>
+
+          <!-- Short informational messages (role="status": announced politely). -->
+          <p id="files-notice" class="files-notice" role="status" hidden></p>
+
+          <!-- Uploads in progress (one row per file, with a progress bar). -->
+          <ul id="upload-queue" class="upload-queue" aria-label="Uploads" hidden></ul>
+
+          <div class="files-scroll">
+            <ul id="file-list" class="file-list" aria-label="Your files"></ul>
+            <div id="files-empty" class="files-empty" hidden>
+              <span class="files-empty-mascot js-mascot"></span>
+              <p class="files-empty-title">Your cloud is still empty</p>
+              <p class="files-empty-text">Drop a first document: it stays on this machine. You will be able to add it to the AI memory later.</p>
+            </div>
+            <p id="files-error" class="files-error" role="alert" hidden></p>
+          </div>
+
+          <!-- Shown while files are dragged over the panel. -->
+          <div class="drop-overlay" aria-hidden="true">
+            <span class="drop-overlay-mascot js-mascot"></span>
+            <span class="drop-overlay-text">Release to upload to your cloud</span>
+          </div>
         </div>
+      </section>
 
-        <!-- Theme switcher: a radio group (only one theme at a time). Arrow keys
-             move between options, as for native radio buttons (js/theme.js). -->
-        <div id="theme-switcher" class="pill theme-switcher" role="radiogroup" aria-label="Theme">
-          <span class="theme-indicator" aria-hidden="true"></span>
-          <button type="button" role="radio" class="theme-option" data-theme-value="day"
-                  aria-checked="false" title="Ciel de Jour" aria-label="Day sky theme">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" aria-hidden="true" focusable="false">
-              <circle cx="12" cy="12" r="4.2" />
-              <path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" />
-            </svg>
-          </button>
-          <button type="button" role="radio" class="theme-option" data-theme-value="night"
-                  aria-checked="false" title="Ciel de Nuit" aria-label="Night sky theme">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-              <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5Z" />
-              <path d="M17 3.5v3M15.5 5h3" />
-            </svg>
-          </button>
-          <button type="button" role="radio" class="theme-option" data-theme-value="pro"
-                  aria-checked="false" title="Mode Pro" aria-label="Professional theme">
-            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-              <rect x="3.5" y="7" width="17" height="12.5" rx="3" />
-              <path d="M9 7V5.5A1.5 1.5 0 0 1 10.5 4h3A1.5 1.5 0 0 1 15 5.5V7M3.5 12.5h17" />
-            </svg>
-          </button>
+      <!-- ================= Right panel: the AI chat ======================= -->
+      <section id="chat-panel" class="panel panel--chat" aria-labelledby="chat-title">
+        <h2 id="chat-title" class="sr-only">AI chat</h2>
+        <div class="panel-inner chat-layout">
+          <!-- ============== Conversations (history) ======================
+               Shown beside the chat when the panel is wide, as a drawer over
+               it when the panel is narrow (split-screen, phone): a CSS
+               container query decides, from the PANEL's width. -->
+          <aside id="sidebar" class="sidebar" aria-label="Conversations">
+            <button id="new-chat-btn" type="button" class="new-chat">
+              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"
+                   stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14" /></svg>
+              New chat
+            </button>
+
+            <h3 class="sidebar-title">Conversations</h3>
+            <nav class="conversations" aria-label="Saved conversations">
+              <ul id="conversation-list" class="conversation-list"></ul>
+              <p id="empty-list" class="empty-list" hidden>No saved conversations yet.</p>
+            </nav>
+          </aside>
+          <!-- Dimmed backdrop behind the drawer; clicking it closes the drawer. -->
+          <div id="sidebar-overlay" class="overlay" hidden></div>
+
+          <div class="main">
+            <header class="topbar">
+              <button id="sidebar-toggle" type="button" class="icon-btn sidebar-toggle"
+                      aria-label="Show conversations" aria-controls="sidebar" aria-expanded="false">
+                <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
+                     stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 7h16M4 12h11M4 17h16" /></svg>
+              </button>
+              <button id="new-chat-mini" type="button" class="icon-btn new-chat-mini" aria-label="New chat"
+                      title="New chat">
+                <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4"
+                     stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14" /></svg>
+              </button>
+
+              <!-- Model menu + health status, grouped in one floating pill. -->
+              <div class="pill model-pill">
+                <!-- Status dot: grey = unknown, green = AI engine + DB up, red = a service is down -->
+                <span id="status-dot" class="status-dot" role="img" aria-label="Checking server status"></span>
+                <label for="model-select" class="sr-only">AI model</label>
+                <span class="select-wrap">
+                  <select id="model-select" class="model-select">
+                    <option>Loading models…</option>
+                  </select>
+                </span>
+              </div>
+
+              <!-- RAG switch (preparation for v0.7): role="switch" is the
+                   ARIA pattern for an on/off setting. The choice is
+                   remembered; no document is sent to the model yet. -->
+              <button id="rag-toggle" type="button" class="pill rag-toggle" role="switch" aria-checked="false"
+                      aria-describedby="rag-status" title="Use the documents of my AI memory as context (RAG)">
+                <span class="switch-track" aria-hidden="true"><span class="switch-knob"></span></span>
+                <span class="rag-label">RAG<span class="rag-label-long"> context</span></span>
+              </button>
+            </header>
+
+            <!-- role="log": a chat history, announced to screen readers as new messages arrive -->
+            <div id="chat-history" class="chat" role="log" aria-live="polite" aria-label="Messages">
+              <div id="messages" class="messages"></div>
+            </div>
+
+            <footer class="composer-wrap">
+              <p id="rag-status" class="rag-status" aria-live="polite" hidden></p>
+              <form id="chat-form" class="composer">
+                <label for="user-input" class="sr-only">Your message</label>
+                <!-- Textarea: Enter sends, Shift+Enter inserts a new line -->
+                <textarea id="user-input" class="composer-input" rows="1" placeholder="Ask anything…"
+                          title="Enter to send, Shift+Enter for a new line" required></textarea>
+                <button id="send-btn" type="submit" class="send-btn" aria-label="Send message">
+                  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4"
+                       stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                    <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" />
+                  </svg>
+                </button>
+              </form>
+              <p class="composer-hint">Runs 100% on your own machine · Enter to send, Shift+Enter for a new line</p>
+            </footer>
+          </div>
         </div>
-      </header>
-
-      <!-- aria-live: screen readers announce new messages as they arrive -->
-      <main id="chat-history" class="chat" aria-live="polite">
-        <div id="messages" class="messages"></div>
-      </main>
-
-      <footer class="composer-wrap">
-        <form id="chat-form" class="composer">
-          <label for="user-input" class="sr-only">Your message</label>
-          <!-- Textarea: Enter sends, Shift+Enter inserts a new line -->
-          <textarea id="user-input" class="composer-input" rows="1" placeholder="Ask anything…"
-                    title="Enter to send, Shift+Enter for a new line" required></textarea>
-          <button id="send-btn" type="submit" class="send-btn" aria-label="Send message">
-            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4"
-                 stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-              <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" />
-            </svg>
-          </button>
-        </form>
-        <p class="composer-hint">Runs 100% on your own machine · Enter to send, Shift+Enter for a new line</p>
-      </footer>
-    </div>
+      </section>
+    </main>
   </div>
 
   <!-- Libraries first (app.js uses them), then our own scripts.
        `defer` downloads in parallel and runs the scripts in order once the
-       HTML is parsed, so every element above already exists. -->
+       HTML is parsed, so every element above already exists. layout.js runs
+       before files.js and app.js so the panels are in their final state
+       (inert or not) before those scripts start. -->
   <script defer src="/static/vendor/marked.umd.js"></script>
   <script defer src="/static/vendor/purify.min.js"></script>
   <script defer src="/static/vendor/highlight.min.js"></script>
+  <script defer src="/static/vendor/katex.min.js"></script>
   <script defer src="/static/js/sky.js"></script>
   <script defer src="/static/js/theme.js"></script>
+  <script defer src="/static/js/layout.js"></script>
+  <script defer src="/static/js/files.js"></script>
   <script defer src="/static/js/app.js"></script>
 </body>
 </html>

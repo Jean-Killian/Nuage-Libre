@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.database import engine
-from app.routers import chat, conversations, health, models
+from app.routers import chat, conversations, files, health, models
 
 STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
 
@@ -37,8 +37,8 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(
     title="Nuage Libre API",
-    description="Self-hosted AI chat backed by a local Ollama engine.",
-    version="0.4.0",
+    description="Self-hosted private cloud and AI chat backed by a local Ollama engine.",
+    version="0.5.0",
     lifespan=lifespan,
 )
 
@@ -46,6 +46,7 @@ app.include_router(health.router)
 app.include_router(chat.router)
 app.include_router(conversations.router)
 app.include_router(models.router)
+app.include_router(files.router)
 
 # Static assets (JS/CSS/images) under /static, and the single-page UI at "/".
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

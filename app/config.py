@@ -11,9 +11,12 @@ environment changes.
 """
 
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+GIB = 1024**3  # one gibibyte, in bytes
 
 
 class Settings(BaseSettings):
@@ -62,6 +65,30 @@ class Settings(BaseSettings):
     max_history_messages: int = Field(default=50, ge=1)
     # Maximum length of a single user message, in characters.
     max_message_length: int = Field(default=100_000, ge=1)
+
+    # --- Private cloud (file storage) -------------------------------------
+    # Folder where uploaded files are physically stored, on the 2 TB Lexar
+    # NVMe of the Bazzite server. A dedicated sub-folder is used rather than
+    # the root of data_nuage_libre/, which already holds the personal files
+    # shared over Samba: the application must own its folder entirely
+    # (opaque UUID file names, no manual edits). See docs/CLOUD_STORAGE.md.
+    storage_dir: Path = Path("/var/mnt/Lexar2To/data_nuage_libre/cloud_storage")
+    # Largest accepted upload. Checked against Content-Length BEFORE reading
+    # the body (HTTP 413), and again while the bytes are streamed to disk.
+    max_upload_bytes: int = Field(default=2 * GIB, ge=1)
+    # Free space that must remain on the disk after an upload (HTTP 507
+    # otherwise), so the cloud can never fill the disk completely.
+    min_free_disk_bytes: int = Field(default=2 * GIB, ge=0)
+
+    @field_validator("storage_dir")
+    @classmethod
+    def storage_dir_must_be_absolute(cls, value: Path) -> Path:
+        """A relative path would depend on the folder uvicorn is started
+        from: the same configuration could then write to two different
+        places. Refusing it at startup removes that ambiguity."""
+        if not value.is_absolute():
+            raise ValueError("NUAGE_STORAGE_DIR must be an absolute path.")
+        return value
 
 
 @lru_cache

@@ -13,13 +13,15 @@ request travels through it, and **why** each technical choice was made.
  │  Android ─┘                    ├── FastAPI app         (venv, port 8000)   │
  │                                ├── PostgreSQL 18       (container, 5432)   │
  │                                ├── Ollama + ROCm       (container, 11434)  │
+ │                                ├── Cloud storage folder (2 TB NVMe)        │
  │                                └── Samba file share    (2 TB NVMe)         │
  └───────────────────────────────────────────────────────────────────────────┘
 ```
 
 The FastAPI application is the single entry point for the browser. It is the
-only component allowed to talk to the database and to the AI engine; neither
-PostgreSQL nor Ollama is meant to be reached directly by client devices.
+only component allowed to talk to the database, to the AI engine and to the
+cloud storage folder; none of them is meant to be reached directly by client
+devices.
 
 ## 2. Layered architecture
 
@@ -27,7 +29,7 @@ PostgreSQL nor Ollama is meant to be reached directly by client devices.
 |---|---|---|---|
 | Presentation | `app/routers/`, `app/schemas.py`, `static/` | Parse and validate HTTP requests, map results/errors to HTTP status codes, serve the UI | Contain SQL or business rules |
 | Business | `app/services/` | Chat orchestration, prompt building, transaction boundaries, talking to Ollama | Know about HTTP status codes or write SQL |
-| Data access | `app/repositories/`, `app/models.py` | Every database query, ORM mapping | Commit transactions or contain business rules |
+| Data access | `app/repositories/`, `app/models.py` | Every database query, ORM mapping; every file read/write on the storage disk (`file_storage.py`) | Commit transactions or contain business rules |
 | Infrastructure | `app/database.py`, `app/config.py`, `migrations/`, `db/` | Connection pool, configuration, schema versioning | — |
 
 **Why layers?**
@@ -44,9 +46,14 @@ PostgreSQL nor Ollama is meant to be reached directly by client devices.
 ### Dependency injection
 
 Routes receive their collaborators through FastAPI's `Depends()` (see
-`app/dependencies.py`): settings → Ollama client → chat service, and a database
-session per request. Nothing is instantiated inside route functions, which lets
-the tests replace any dependency with `app.dependency_overrides`.
+`app/dependencies.py`): settings → Ollama client → chat service, settings →
+file storage → file service, and a database session per request. Nothing is
+instantiated inside route functions, which lets the tests replace any
+dependency with `app.dependency_overrides`.
+
+The identity of the caller is injected the same way:
+`user_id = Depends(get_current_user_id)` (`app/auth.py`). It is the single
+place that will change when authentication arrives (§4.11).
 
 ## 3. Request lifecycle: sending a chat message
 
@@ -69,6 +76,18 @@ the tests replace any dependency with `app.dependency_overrides`.
 6. When the model is done, **one transaction** inserts the conversation (if new),
    the user message and the assistant answer, then a `done` event is sent with
    the generation statistics.
+
+### Uploading a file (summary)
+
+1. The browser sends `POST /api/files` with the **raw bytes** as the body,
+   `Content-Type: application/octet-stream` and the name in `X-File-Name`.
+2. The router checks the protocol (415 / 411 / 422); the service checks the
+   rules (name, size limit 413, free space 507) **before reading the body**.
+3. `FileStorage` streams the body to `<root>/<user_id>/.<file_id>.part`,
+   `fsync`s it, renames it atomically to `<file_id>`.
+4. Only then is the `files` row inserted; if that fails, the bytes are deleted.
+
+Full life cycle, failure table and diagrams: [CLOUD_STORAGE.md](CLOUD_STORAGE.md) §3.
 
 ## 4. Design decisions
 
@@ -118,9 +137,10 @@ for the answer.
 
 ### 4.5 UUID primary keys
 
-Ids appear in URLs (`/api/conversations/{id}`). Sequential integers would reveal
-how many conversations exist and let anyone try `1, 2, 3…`. Random UUIDv4s are
-not guessable. This will matter once multiple users exist (v0.5).
+Ids appear in URLs (`/api/conversations/{id}`, `/api/files/{id}/download`).
+Sequential integers would reveal how many conversations exist and let anyone try
+`1, 2, 3…`. Random UUIDv4s are not guessable. Combined with the ownership filter
+of every query (§4.11), knowing an id is never enough to reach someone else's data.
 
 ### 4.6 PostgreSQL rather than SQLite
 
@@ -183,6 +203,33 @@ with **highlight.js**.
   the answer is complete.
 - User messages are never interpreted as Markdown: they stay plain text.
 
+**Mathematics (KaTeX).** Formulas written in LaTeX are typeset with KaTeX
+(vendored). The four notations models use are recognised: `$…$` and `\(…\)`
+inline, `$$…$$` and `\[…\]` displayed.
+
+- *Integration*: a small **marked extension** (custom tokenizers in
+  `static/js/app.js`) detects formulas *before* Markdown rules apply, otherwise
+  `a_1 * b_1` would become italics and `\(` would lose its backslash (Markdown
+  escape). The extension calls `katex.renderToString()`.
+- *Pipeline unchanged*: Markdown → marked (+ math) → **DOMPurify** → `innerHTML`.
+  KaTeX's HTML is sanitised like everything else (defence in depth); DOMPurify
+  keeps what KaTeX needs (`span` + `class`/`style`, MathML, SVG paths).
+- *KaTeX hardening*: `trust: false` refuses `\href`, `\url`, `\htmlClass`,
+  `\includegraphics`…; `maxExpand` and `maxSize` stop recursive macros and giant
+  sizes (a "macro bomb" `\def\a{\a\a}\a` is reported as an error instead of
+  freezing the tab); invalid formulas are shown in the theme's error colour with
+  their source (`throwOnError: false`) instead of breaking the answer.
+- *Accessibility*: output is HTML (visual) + MathML (read by screen readers).
+  DOMPurify forbids MathML `<semantics>`/`<annotation>` but keeps their text; a
+  DOMPurify hook empties `<annotation>` first so the raw TeX is not read aloud.
+- *Dollar ambiguity*: `$5 and $10` must stay text. Rule from Pandoc: no space
+  just inside the dollars, and no digit right after the closing one. Exception
+  added after the end-to-end test: `$ x^2 $` (space on **both** sides), a form
+  the real model writes.
+- *Streaming*: a formula is rendered once its closing delimiter has arrived;
+  rendered HTML is cached (bounded `Map`), so 60 re-renders per second do not
+  re-typeset the same formula.
+
 ### 4.10 Front-end: visual identity and themes
 
 The UI has its own visual identity, built around the logo (a small *kawaii*
@@ -198,12 +245,15 @@ static/
 ├── index.html          structure only; links everything below
 ├── css/
 │   ├── themes.css      design tokens (CSS custom properties) + the 3 themes
-│   ├── app.css         layout, cloud bubbles, sky layers, animations
+│   ├── app.css         layout (app bar, split-screen), chat, cloud bubbles, sky
+│   ├── files.css       file manager panel (private cloud)
 │   └── markdown.css    typography of the model's answers
 ├── js/
 │   ├── theme.js        theme switcher, circular reveal, "themechange" event
+│   ├── layout.js       view switcher (split / chat / files), "viewchange" event
 │   ├── sky.js          drifting clouds (day), star canvas (night)
-│   └── app.js          chat logic (API, streaming, conversations, models)
+│   ├── files.js        file manager (list, drag & drop upload, download)
+│   └── app.js          chat logic (API, streaming, conversations, models, RAG switch)
 ├── fonts/              Nunito variable font (woff2), SIL Open Font License
 └── vendor/             marked, DOMPurify, highlight.js (pinned)
 ```
@@ -275,21 +325,67 @@ It is gone: fonts are served locally too (`static/fonts/`), so opening the UI
 makes no request outside the machine. An automated test enforces it
 (`T-SEC-04`).
 
+### 4.11 Multi-user foundation: the "Ghost User"
+
+Authentication comes in v0.6, but the data model is multi-user **now**: a
+minimal `users` table, `conversations.user_id` and `files.user_id` as NOT NULL
+foreign keys, and every repository query filtered by `user_id`. Until login
+exists, that id is always the **Ghost User**, a real row seeded by migration
+`c3e9a1d4b7f2` with a hard-coded UUID (`GHOST_USER_ID` in `app/auth.py`).
+
+The caller's identity comes from one FastAPI dependency,
+`get_current_user_id()` (the *seam*). In v0.6 only its body changes (verify a
+JWT); routers, services, repositories and tables stay as they are. The tests
+already impersonate a second user through that seam and prove the isolation
+(T-USER-03/04). Another user's resource answers 404, not 403, so the API never
+confirms that an id exists. Details and alternatives considered:
+[CLOUD_STORAGE.md](CLOUD_STORAGE.md) §2.3.
+
+### 4.12 Private cloud storage
+
+- **Bytes on disk, index in PostgreSQL.** Files are stored under
+  `NUAGE_STORAGE_DIR` (2 TB NVMe) as `<user_id>/<file_id>`; the `files` table
+  holds the display name, type, size, owner and a *relative* path.
+- **Raw-body upload streamed to disk** rather than FastAPI's multipart
+  `UploadFile`: on this server `/tmp` is a tmpfs (RAM shared with the LLM), where
+  Starlette would first copy every upload. Streaming writes once, in constant
+  memory, and the size limit is checked before reading.
+- **Disk first, database last**, with a compensating delete if the `INSERT`
+  fails: a row never points to missing bytes.
+- **Two storage technologies, two data-access classes**: `FileRepository` (SQL)
+  and `FileStorage` (disk), coordinated by `FileService`.
+
+Full rationale: [CLOUD_STORAGE.md](CLOUD_STORAGE.md) §5.
+
+### 4.13 Split-screen workspace
+
+The main screen is a CSS grid with two panels (file manager, chat) whose column
+widths follow `<html data-view="split|chat|files">` (`1fr 1fr`, `0fr 1fr`,
+`1fr 0fr`, animated). `js/layout.js` only sets the attribute and makes the hidden
+panel `inert`. Inside the panels, layout decisions use **container queries**
+(the width of the panel, not of the screen): e.g. the conversation history is a
+column beside the chat when the chat panel is wide, a drawer otherwise. Below
+900 px, "split" falls back to the chat. Details: [CLOUD_STORAGE.md](CLOUD_STORAGE.md) §6.
+
 ## 5. Security
 
 | # | Risk (OWASP reference) | Mitigation in Nuage Libre | Where |
 |---|---|---|---|
 | 1 | Injection – SQL | SQLAlchemy expressions → always parameterised statements; no string concatenation | `repositories/`, test `T-SEC-01` |
-| 2 | Injection – XSS | Markdown answers sanitised by DOMPurify before `innerHTML`; all other text via `textContent` | `static/js/app.js` (`renderMarkdown`), T-SEC-03 |
+| 2 | Injection – XSS | Markdown answers (including KaTeX output) sanitised by DOMPurify before `innerHTML`; KaTeX `trust: false`; all other text via `textContent` | `static/js/app.js` (`renderMarkdown`), T-SEC-03, T-SEC-05 |
 | 2b | Untrusted parameter (model name) | Allow-list of installed chat models, 422 otherwise | `model_catalog.py`, T-SEC-02 |
 | 2c | Software supply chain | Front-end libraries and fonts vendored, pinned, checksummed; no CDN (enforced by a test) | `static/vendor/`, `static/fonts/`, T-SEC-04 |
-| 3 | Broken access control | ⚠️ Not yet: no authentication. Mitigated by Tailscale network-level access only | Roadmap v0.5 |
+| 3 | Broken access control | Every query scoped by `user_id`; another user's data answers 404 (IDOR). ⚠️ No authentication yet: the caller is always the Ghost User, access relies on Tailscale | `repositories/`, `auth.py`, T-USER-03/04; login in v0.6 |
+| 3b | Path traversal (file download) | Paths built only from server UUIDs; typed `uuid` route parameter; ownership filter; `CHECK` constraint on `files.file_path`; containment check after `resolve()` (symlinks included) | `file_storage.py`, T-SEC-07/08, [CLOUD_STORAGE.md](CLOUD_STORAGE.md) §4.2 |
+| 3c | Stored XSS through uploaded files | Inline display only for script-free types; text shown as `text/plain`; `nosniff`; `CSP: sandbox`; HTML/SVG always downloaded | `file_policy.py`, T-SEC-06 |
+| 3d | CSRF (cross-site upload) | Upload requires a custom header and `application/octet-stream` → CORS preflight, never granted; multipart refused (415); `Cross-Origin-Resource-Policy: same-origin` on downloads | `routers/files.py`, T-FILE-07 |
 | 4 | Security misconfiguration | DB port bound to localhost; restricted DB role; secrets outside Git | `compose.yaml`, `db/init/` |
 | 5 | Cryptographic failures / secrets | Random passwords in `.env` (`chmod 600`, git-ignored) | `.env.example` |
 | 6 | Insecure design – data integrity | FK, CHECK constraint, atomic transactions | `models.py`, `chat_service.py` |
 | 7 | Information disclosure | Generic error messages to clients, details only in logs | `chat_service.py` |
-| 8 | Resource exhaustion (LLM10 *Unbounded Consumption*) | Max message length, bounded history, `limit` validated (1–200), fixed context size | `config.py`, routers |
-| 9 | Prompt injection (LLM01) | Not exploitable yet (no documents, no tools). Will be addressed with RAG: documents treated as untrusted data, no tool execution from document content | Roadmap v0.6 |
+| 8 | Resource exhaustion (LLM10 *Unbounded Consumption*) | Max message length, bounded history, `limit` validated, fixed context size; uploads: size limit checked before reading (413), `Content-Length` required (411), free-disk reserve (507), streaming in constant memory | `config.py`, routers, `file_service.py` |
+| 8b | Header injection / spoofed file names | Names cleaned: control characters (CR/LF), bidirectional overrides (RTLO), path parts removed; NFC | `file_policy.clean_filename`, T-POL-01 |
+| 9 | Prompt injection (LLM01) | Not exploitable yet (files are stored, not read by the model; no tools). Will be addressed with RAG: documents treated as untrusted data, no tool execution from document content | Roadmap v0.7 |
 
 References: OWASP Top 10, OWASP Top 10 for LLM Applications (2025),
 ANSSI recommendations for PostgreSQL deployments.

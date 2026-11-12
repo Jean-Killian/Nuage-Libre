@@ -69,6 +69,8 @@
   --radius-ai: 8px 34px 30px 36px / 8px 30px 34px 28px;
   --radius-user: 34px 8px 36px 30px / 30px 8px 28px 34px;
   --radius-pill: 999px;
+  /* The file manager panel: a large, softly irregular cloud bank. */
+  --radius-panel: 40px 48px 44px 36px / 38px 44px 46px 40px;
 
   /* Motion: one easing curve everywhere gives the UI a coherent "feel".
      This one overshoots slightly, which feels soft and bouncy. */
@@ -95,6 +97,8 @@
   --text-faint: #64748b;              /* 4.76:1 on white: still readable */
   --accent-ink: #0a6f99;              /* sky blue darkened for text, 5.6:1 */
   --accent-ink-pink: #b4436a;         /* pink darkened for text, 5.3:1 */
+  --accent-ink-violet: #6d4fc2;       /* file-type badges (audio/video), 5.9:1 */
+  --accent-ink-amber: #8a5a00;        /* file-type badges (archives), 5.9:1 */
 
   --sky-base: #eef8ff;
 
@@ -142,6 +146,21 @@
   --md-table-head: #f1f8fc;
 
   --scrollbar: rgba(30, 41, 59, 0.18);
+
+  /* File manager (cloud panel). Opaque enough (72 %) that the small
+     coloured file-type badges keep a 4.5:1 contrast whatever part of the
+     blue sky shows through. */
+  --panel-bg: rgba(255, 255, 255, 0.72);
+  --panel-border: rgba(255, 255, 255, 0.75);
+  --panel-shadow: 0 28px 60px -32px rgba(30, 64, 120, 0.4), 0 6px 18px -10px rgba(91, 206, 250, 0.3);
+  --dropzone-border: rgba(10, 111, 153, 0.34);
+  --dropzone-bg: rgba(238, 248, 255, 0.7);
+  --dropzone-active-bg: rgba(191, 234, 253, 0.65);
+  --progress-track: rgba(30, 41, 59, 0.08);
+
+  /* On/off switch (RAG). */
+  --switch-off-bg: rgba(30, 41, 59, 0.18);
+  --switch-knob: #ffffff;
 }
 
 /* ---- Thème 2: Ciel de Nuit -------------------------------------------------
@@ -155,6 +174,8 @@
   --text-faint: #94a3b8;
   --accent-ink: #7dd8fb;
   --accent-ink-pink: #f7bccb;
+  --accent-ink-violet: #c4b5fd;
+  --accent-ink-amber: #fcd34d;
 
   --sky-base: #0f172a;
 
@@ -206,6 +227,17 @@
   --md-table-head: rgba(15, 23, 42, 0.6);
 
   --scrollbar: rgba(148, 163, 184, 0.25);
+
+  --panel-bg: rgba(15, 23, 42, 0.55);
+  --panel-border: rgba(125, 216, 251, 0.16);
+  --panel-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.75), 0 0 46px -20px rgba(91, 206, 250, 0.35);
+  --dropzone-border: rgba(125, 216, 251, 0.42);
+  --dropzone-bg: rgba(30, 41, 59, 0.55);
+  --dropzone-active-bg: rgba(91, 206, 250, 0.16);
+  --progress-track: rgba(148, 163, 184, 0.18);
+
+  --switch-off-bg: rgba(148, 163, 184, 0.32);
+  --switch-knob: #f8fafc;
 }
 
 /* ---- Thème 3: Mode Pro -----------------------------------------------------
@@ -221,6 +253,8 @@
   --text-faint: #475569;              /* 7.6:1 on white */
   --accent-ink: #0369a1;
   --accent-ink-pink: #be185d;
+  --accent-ink-violet: #5b21b6;
+  --accent-ink-amber: #92400e;
 
   --sky-base: #f4f5f7;
 
@@ -231,6 +265,7 @@
 
   --radius-ai: 6px 22px 22px 22px / 6px 20px 22px 20px;
   --radius-user: 22px 6px 22px 22px / 20px 6px 20px 22px;
+  --radius-panel: 16px;
 
   --bubble-ai-bg: #ffffff;
   --bubble-ai-text: #0f172a;
@@ -269,4 +304,15 @@
   --md-table-head: #f8fafc;
 
   --scrollbar: #cbd5e1;
+
+  --panel-bg: #ffffff;
+  --panel-border: #e4e7ec;
+  --panel-shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 1px 3px rgba(16, 24, 40, 0.08);
+  --dropzone-border: #cbd5e1;
+  --dropzone-bg: #f8fafc;
+  --dropzone-active-bg: #eff6ff;
+  --progress-track: #eef2f6;
+
+  --switch-off-bg: #cbd5e1;
+  --switch-knob: #ffffff;
 }
