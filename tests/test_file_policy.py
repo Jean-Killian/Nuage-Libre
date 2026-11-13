@@ -8,9 +8,13 @@ import pytest
 
 from app.services.file_policy import (
     MAX_FILENAME_LENGTH,
+    MAX_FOLDER_NAME_LENGTH,
     InvalidFileNameError,
+    InvalidFolderNameError,
     can_preview,
     clean_filename,
+    clean_folder_name,
+    first_free_name,
     guess_mime_type,
     inline_media_type,
     needs_sandbox,
@@ -119,3 +123,50 @@ def test_sandbox_everywhere_except_built_in_viewers():
     assert needs_sandbox("application/pdf") is False
     assert needs_sandbox("audio/mpeg") is False
     assert needs_sandbox("video/mp4") is False
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Courses", "Courses"),
+        ("  Vacances 🌴 été  ", "Vacances 🌴 été"),
+        ("e\u0301te\u0301", "\u00e9t\u00e9"),  # NFD (macOS) -> NFC
+        ("tab\there", "tabhere"),  # control characters removed
+        ("a\u202eb", "ab"),  # bidi override removed
+        (".hidden", ".hidden"),  # a leading dot is a legitimate name
+        ("x" * MAX_FOLDER_NAME_LENGTH, "x" * MAX_FOLDER_NAME_LENGTH),
+    ],
+)
+def test_clean_folder_name(raw, expected):
+    """T-POL-08: folder names get the same hygiene as file names."""
+    assert clean_folder_name(raw) == expected
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        ("", "empty"),
+        ("  \r\n ", "empty"),
+        (".", "reserved"),
+        ("..", "reserved"),
+        ("Courses/2026", "cannot contain"),
+        ("C:\\Users", "cannot contain"),
+        ("x" * (MAX_FOLDER_NAME_LENGTH + 1), "limited"),
+    ],
+)
+def test_clean_folder_name_refuses(raw, message):
+    """T-POL-09: unlike file names, a folder name with a separator or too long
+    is REFUSED with a clear reason, never silently cut."""
+    with pytest.raises(InvalidFolderNameError, match=message):
+        clean_folder_name(raw)
+
+
+def test_first_free_name():
+    """T-POL-10: "Photos" -> "Photos (2)" -> "Photos (3)"; the suffix always fits."""
+    assert first_free_name("Photos", set()) == "Photos"
+    assert first_free_name("Photos", {"Photos"}) == "Photos (2)"
+    assert first_free_name("Photos", {"Photos", "Photos (2)", "Photos (4)"}) == "Photos (3)"
+    long_name = "x" * MAX_FOLDER_NAME_LENGTH
+    renamed = first_free_name(long_name, {long_name})
+    assert len(renamed) == MAX_FOLDER_NAME_LENGTH
+    assert renamed.endswith(" (2)")

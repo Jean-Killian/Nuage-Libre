@@ -14,7 +14,7 @@ These rules apply to any AI assistant (Claude, Roo Code, Cline, Aider...) workin
      commits: transactions are decided by the service layer.
    - **Ownership:** every route gets the caller with
      `user_id = Depends(get_current_user_id)` (`app/auth.py`), and every query on
-     user-owned data (conversations, files) filters on it. Another user's
+     user-owned data (conversations, files, folders) filters on it. Another user's
      resource answers 404. Never read `GHOST_USER_ID` directly outside `auth.py`
      and the tests: authentication (v0.6) will only replace that dependency.
 3. **Local only:** never add a library or API that sends data to the internet.
@@ -28,12 +28,12 @@ These rules apply to any AI assistant (Claude, Roo Code, Cline, Aider...) workin
    `static/js/app.js`, which sanitises with DOMPurify. Front-end libraries and
    fonts are vendored in `static/vendor/` and `static/fonts/` (no CDN, checked by
    test T-SEC-04). Never commit `.env`.
-8. **Front-end styling:** use the design tokens of `static/css/themes.css`
+6. **Front-end styling:** use the design tokens of `static/css/themes.css`
    (`var(--...)`), never raw colours in components, so the three themes keep
    working. Respect `prefers-reduced-motion` for any new animation.
-6. **Document in English:** detailed code comments and docstrings explaining the
+7. **Document in English:** detailed code comments and docstrings explaining the
    *why*, so the project owner can understand and present every line.
-7. **Tests must pass before finishing:**
+8. **Tests must pass before finishing:**
    ```bash
    venv/bin/pytest -q && venv/bin/ruff check . && venv/bin/ruff format --check .
    ```

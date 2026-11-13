@@ -119,12 +119,14 @@ async def clean_tables():
     """Reset the database before each test.
 
     Order matters because of the foreign keys: files first (ON DELETE
-    RESTRICT would refuse to delete their owner), then conversations
-    (messages follow by CASCADE), then every user except the Ghost User,
-    who is part of the schema (seeded by the migration).
+    RESTRICT would refuse to delete their owner or their folder), then
+    folders (sub-folders follow by CASCADE), then conversations (messages
+    follow by CASCADE), then every user except the Ghost User, who is part
+    of the schema (seeded by the migration).
     """
     async with engine.begin() as conn:
         await conn.execute(text("DELETE FROM files"))
+        await conn.execute(text("DELETE FROM folders"))
         await conn.execute(text("DELETE FROM conversations"))
         await conn.execute(text("DELETE FROM users WHERE id <> :ghost"), {"ghost": GHOST_USER_ID})
     yield
@@ -199,12 +201,20 @@ async def create_user(username: str):
         )
 
 
-async def upload(client, content: bytes = b"hello cloud", name: str = "notes.txt", **headers):
-    """Upload ``content`` the way the web UI does (raw body + X-File-Name)."""
+async def upload(client, content: bytes = b"hello cloud", name: str = "notes.txt", folder_id=None, **headers):
+    """Upload ``content`` the way the web UI does (raw body + X-File-Name),
+    at the root of the cloud or into ``folder_id``."""
     from urllib.parse import quote
 
     return await client.post(
         "/api/files",
         content=content,
+        params={"folder_id": str(folder_id)} if folder_id else None,
         headers={"Content-Type": "application/octet-stream", "X-File-Name": quote(name), **headers},
     )
+
+
+async def create_folder(client, name: str, parent_id=None, **extra):
+    """Create a folder through the API and return the response."""
+    body = {"name": name, "parent_id": str(parent_id) if parent_id else None, **extra}
+    return await client.post("/api/folders", json=body)

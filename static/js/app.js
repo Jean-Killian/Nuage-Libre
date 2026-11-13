@@ -42,6 +42,7 @@
   const sidebar = $('sidebar');
   const overlay = $('sidebar-overlay');
   const sidebarToggle = $('sidebar-toggle');
+  const jumpBtn = $('jump-latest');
 
   /** Return a fresh copy of a <template>'s content (icon, mascot...). */
   const cloneTemplate = (id) => $(id).content.firstElementChild.cloneNode(true);
@@ -49,8 +50,160 @@
   // Every mascot slot of the page: logo, empty cloud, drag & drop overlay.
   document.querySelectorAll('.js-mascot').forEach((slot) => slot.appendChild(cloneTemplate('mascot-template')));
 
+  // ------------------------------------------------------ follow scrolling
+  const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+
+  /**
+   * "Follow the output" scrolling for a scrollable element, like a terminal
+   * or a live chat:
+   *
+   * - while the reader is at the bottom, new content keeps the view at the
+   *   bottom (the text being written stays in sight);
+   * - as soon as they scroll UP, following stops: the view stays exactly
+   *   where they put it, so they can read calmly while the model writes;
+   * - scrolling back down to the bottom (or calling follow()) resumes it.
+   *
+   * Why the wheel, touch and keyboard are watched, and not only "scroll":
+   * a model writes 30 to 50 tokens per second, so the content grows (and
+   * we scroll down) between two screen frames. The "scroll" event is sent
+   * asynchronously, AFTER our own scroll may already have put the view back
+   * at the bottom: the user's gesture would be undone before we could even
+   * see it, which was the bug. wheel, touchmove and keydown are sent BEFORE
+   * the browser scrolls, so following stops at the very first notch.
+   *
+   * Returns { changed(), follow(smooth), isFollowing(), distance() }.
+   * `onChange` is called after every change of position or content.
+   */
+  function followScroll(el, { onChange = () => {} } = {}) {
+    // "At the bottom" tolerance in px: absorbs sub-pixel rounding and
+    // zoom, without catching a reader who moved up even a few lines.
+    const NEAR_BOTTOM = 8;
+    let following = true;
+    let lastTop = el.scrollTop;
+    let frame = 0;
+    let touchY = null;
+
+    let pressTop = null;
+    let pressFollowing = false;
+
+    const distance = () => el.scrollHeight - el.scrollTop - el.clientHeight;
+
+    function stop() {
+      following = false;
+      onChange();
+    }
+
+    /** True if the gesture scrolls a box INSIDE `el` (e.g. the reasoning
+     *  panel within the chat) that can still go up: then `el` itself does
+     *  not move, and must keep following. */
+    function innerBoxScrolls(target) {
+      for (let node = target; node && node !== el; node = node.parentElement) {
+        if (node.scrollTop > 0 && node.scrollHeight > node.clientHeight) {
+          const { overflowY } = getComputedStyle(node);
+          if (overflowY === 'auto' || overflowY === 'scroll') return true;
+        }
+      }
+      return false;
+    }
+
+    // Intentions to go UP, seen before the browser moves anything.
+    el.addEventListener('wheel', (event) => {
+      if (event.deltaY < 0 && !innerBoxScrolls(event.target)) stop();
+    }, { passive: true });
+    el.addEventListener('touchstart', (event) => { touchY = event.touches[0].clientY; }, { passive: true });
+    el.addEventListener('touchmove', (event) => {
+      // Finger moving DOWN the screen = content scrolling UP.
+      if (touchY !== null && event.touches[0].clientY > touchY + 4 && !innerBoxScrolls(event.target)) stop();
+    }, { passive: true });
+    el.addEventListener('keydown', (event) => {
+      const up = ['ArrowUp', 'PageUp', 'Home'].includes(event.key) || (event.key === ' ' && event.shiftKey);
+      if (up && !innerBoxScrolls(event.target)) stop();
+    });
+    // A press on the element itself (not on a message) may be the start of
+    // a scrollbar drag: pause while the button is down. On release, if the
+    // view did not move (a simple click in an empty area), carry on as before.
+    el.addEventListener('pointerdown', (event) => {
+      if (event.target !== el) return;
+      pressTop = el.scrollTop;
+      pressFollowing = following;
+      stop();
+      window.addEventListener('pointerup', () => {
+        const unmoved = el.scrollTop === pressTop;
+        pressTop = null;
+        if ((pressFollowing && unmoved) || distance() <= NEAR_BOTTOM) {
+          following = true;
+          changed();
+        }
+      }, { once: true });
+    });
+
+    // Every other way of moving (scrollbar, find in page, screen reader...)
+    // is seen here, once the browser has scrolled.
+    el.addEventListener('scroll', () => {
+      const top = el.scrollTop;
+      if (distance() <= NEAR_BOTTOM) {
+        // Back at the bottom by going down: follow again. (When content
+        // above shrinks, the browser moves the view UP while it stays at
+        // the bottom: that must not change anything.)
+        if (top >= lastTop) following = true;
+      } else if (top < lastTop) {
+        following = false;
+      }
+      lastTop = top;
+      onChange();
+    }, { passive: true });
+
+    /** To call after every change of the content (new token, new message). */
+    function changed() {
+      if (following && !frame) {
+        // At most one scroll per screen frame, after the frame's rendering.
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          if (!following) return; // the user scrolled up meanwhile
+          el.scrollTop = el.scrollHeight;
+          lastTop = el.scrollTop;
+          onChange();
+        });
+      }
+      onChange();
+    }
+
+    /** Go (back) to the bottom and follow from now on. */
+    function follow({ smooth = false } = {}) {
+      following = true;
+      if (smooth && !reducedMotion.matches) {
+        el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+      } else {
+        el.scrollTop = el.scrollHeight;
+        lastTop = el.scrollTop;
+      }
+      onChange();
+    }
+
+    return { changed, follow, isFollowing: () => following, distance };
+  }
+
+  /*
+   * "Latest" button, above the composer: shown when the latest message is
+   * out of view. While the model is writing below, it glows softly
+   * (.is-live) to say that new text is arriving.
+   */
+  const JUMP_THRESHOLD = 160; // px below the view before the button appears
+  function updateJumpButton() {
+    const away = chatFollow.distance() > JUMP_THRESHOLD;
+    if (jumpBtn.hidden === away) jumpBtn.hidden = !away;
+    jumpBtn.classList.toggle('is-live', away && isGenerating);
+  }
+  const chatFollow = followScroll(chatHistory, { onChange: updateJumpButton });
+
+  jumpBtn.addEventListener('click', () => {
+    const hadFocus = document.activeElement === jumpBtn;
+    chatFollow.follow({ smooth: true });
+    // The button disappears: a keyboard user must not lose their place.
+    if (hadFocus) (userInput.disabled ? chatHistory : userInput).focus({ preventScroll: true });
+  });
+
   // ------------------------------------------------------------ rendering
-  const scrollToBottom = () => { chatHistory.scrollTop = chatHistory.scrollHeight; };
 
   // Clickable example prompts on the welcome screen.
   const SUGGESTIONS = [
@@ -132,6 +285,10 @@
       summary.textContent = 'Thought process';
       const thought = document.createElement('div');
       thought.className = 'thought-text';
+      // The reasoning box scrolls on its own (max-height): it follows the
+      // model's thoughts the same way, and can be read while they stream.
+      thought.tabIndex = 0; // a scrollable region must be reachable by keyboard
+      parts.thoughtFollow = followScroll(thought);
       details.append(summary, thought);
 
       // Answer area, styled by css/markdown.css.
@@ -148,7 +305,7 @@
 
     wrapper.appendChild(bubble);
     messagesEl.appendChild(wrapper);
-    scrollToBottom();
+    chatFollow.changed();
     return parts;
   }
 
@@ -538,6 +695,8 @@
         parts.answer.textContent = msg.content; // user text: never interpreted
       }
     }
+    // An opened conversation starts at its latest message.
+    chatFollow.follow();
     // Continue with the model of the latest answer.
     selectModel(conv.model);
     openSidebar(false);
@@ -556,6 +715,7 @@
     if (isGenerating) return;
     currentConversationId = null;
     showWelcome();
+    chatFollow.follow();
     openSidebar(false);
     refreshConversationList();
     userInput.focus();
@@ -568,7 +728,9 @@
   // chat when it comes back, and the latest message should be in view.
   document.addEventListener('viewchange', (event) => {
     openSidebar(false);
-    if (event.detail.view !== 'files') scrollToBottom();
+    // The panel's width changed, so its text was re-wrapped: put the latest
+    // message back in view, unless the reader was reading further up.
+    if (event.detail.view !== 'files' && chatFollow.isFollowing()) chatFollow.follow();
   });
 
   // ------------------------------------------------------------------ RAG
@@ -608,9 +770,9 @@
 
   ragToggle.addEventListener('click', () => setRag(!ragEnabled()));
 
-  // Sent by js/files.js each time the list of files changes.
-  document.addEventListener('files:changed', (event) => {
-    documentsInMemory = event.detail.files.filter((f) => f.is_vectorized).length;
+  // Sent by js/files.js with the totals of the whole cloud (all folders).
+  document.addEventListener('cloud:changed', (event) => {
+    documentsInMemory = event.detail.summary.in_ai_memory;
     updateRagStatus();
   });
 
@@ -645,9 +807,12 @@
     sendBtn.disabled = busy;
     // Lets the CSS animate the mascot while the model works.
     document.body.classList.toggle('is-generating', busy);
+    updateJumpButton();
   }
 
   async function sendMessage(message) {
+    // Sending a message means "show me the answer": follow from the bottom.
+    chatFollow.follow();
     appendBubble('user').answer.textContent = message;
     setBusy(true);
 
@@ -670,7 +835,7 @@
         // final render (it would erase highlighting and copy buttons).
         if (streamFinished) return;
         renderMarkdown(ai.answer, answer);
-        scrollToBottom();
+        chatFollow.changed();
       });
     };
 
@@ -705,6 +870,7 @@
             case 'thinking':
               thought += evt.text;
               showThought(ai, thought);
+              ai.thoughtFollow.changed();
               if (!answer) {
                 ai.details.open = true;
                 ai.details.classList.add('is-thinking');
@@ -727,7 +893,7 @@
               showStats(ai, evt.model, evt.token_count, evt.generation_ms);
               break;
           }
-          scrollToBottom();
+          chatFollow.changed();
         });
       }
     } catch (err) {
@@ -741,6 +907,7 @@
       // then syntax highlighting and copy buttons.
       renderMarkdown(ai.answer, answer);
       enhanceCodeBlocks(ai.answer);
+      chatFollow.changed();
     }
     if (errorText) {
       if (!answer) ai.wrapper.remove();

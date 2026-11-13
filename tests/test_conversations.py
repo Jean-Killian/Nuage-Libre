@@ -92,6 +92,19 @@ async def test_front_end_assets_are_served(client):
             assert "javascript" in response.headers["content-type"], path
 
 
+async def test_interface_files_are_revalidated(client):
+    """T-UI-03: the page and its assets carry "Cache-Control: no-cache" and an
+    ETag, so a browser never mixes an old stylesheet with a new script after
+    an update, and an unchanged file only costs a "304 Not Modified"."""
+    page = await client.get("/")
+    css = await client.get("/static/css/app.css")
+    unchanged = await client.get("/static/css/app.css", headers={"If-None-Match": css.headers["etag"]})
+
+    assert page.headers["cache-control"] == "no-cache"
+    assert css.headers["cache-control"] == "no-cache"
+    assert unchanged.status_code == 304
+
+
 async def test_page_loads_nothing_from_the_internet(client):
     """T-SEC-04 (sovereignty): the UI references no third-party server, so
     opening it never leaks the user's IP address or activity to a CDN.

@@ -67,6 +67,7 @@ venv/bin/ruff check . && venv/bin/ruff format --check .
 | T-HEALTH-01 | Health reports database and AI engine | `database=up`, `ollama=up`, version |
 | T-UI-01 | Web UI served at `/` | 200, page contains "Nuage Libre" |
 | T-UI-02 | Every CSS / JS / font file referenced by the page is served | Each `/static/...` URL found in the HTML → 200 with the right content type |
+| T-UI-03 | The interface is revalidated, never reused stale after an update | Page and `/static` send `Cache-Control: no-cache` and an ETag; `If-None-Match` → 304 |
 | T-SEC-04 | Sovereignty: the UI loads nothing from the internet | No `http(s)://` or `//` URL in `src`/`href` of the page nor in `url(...)` of our stylesheets |
 
 ### Model selection (`tests/test_models.py`)
@@ -132,12 +133,41 @@ venv/bin/ruff check . && venv/bin/ruff format --check .
 | T-POL-05 | MIME types (8 cases) | From the extension, case-insensitive; compression → real type; unknown → `application/octet-stream` |
 | T-POL-06 / T-SEC-06 | Inline allow-list (11 cases) | Images, PDF, media as-is; text/HTML/JSON → `text/plain`; SVG, XHTML, ZIP, binary → never inline |
 | T-POL-07 | Sandbox | Everything sandboxed except PDF, audio, video (built-in viewers) |
+| T-POL-08 | Folder name cleaning (7 cases) | Spaces stripped, NFD → NFC, TAB and RTLO removed; `.hidden` and 255 characters accepted |
+| T-POL-09 | Folder names refused (7 cases) | Empty, blank, `.`, `..`, `Courses/2026`, `C:\Users`, 256 characters → `InvalidFolderNameError` with the reason |
+| T-POL-10 | Free name on conflict | `Photos` → `Photos (2)` → `Photos (3)` (gaps filled); a 255-character name keeps its suffix and length |
 | T-STO-01 / T-SEC-08 | Containment (5 cases) | `/etc/passwd`, `../../../etc/passwd`, `user/../../outside`, `""`, `"."` → `UnsafePathError` |
 | T-STO-02 / T-SEC-08 | Symlink escape | `user/trap → /etc/passwd` → `UnsafePathError` |
 | T-STO-03 | Normal layout | `<uuid>/<uuid>` resolves inside the root |
 | T-STO-04 | Atomic, private write | 3000 small chunks (≈ 3 MiB) re-assembled exactly; file 600, folder 700; no `.part` left |
 | T-STO-05 | Failed write | Stream raising half-way → folder empty |
 | T-STO-06 | Free space before the first upload | Measured on the nearest existing parent, without creating anything |
+
+### Folders (`tests/test_folders.py`, v0.5.1)
+
+| ID | Requirement | Expected result |
+|---|---|---|
+| T-FOLD-01 | Create a folder at the root | 201 + `Location`; no `user_id` in the JSON; nothing written on disk |
+| T-FOLD-02 | Path of a folder (breadcrumb) | `Courses / 2026 / Maths`, ids in order, root first |
+| T-FOLD-03 | List sub-folders | Root lists only its children, by name as a person expects (`Apple`, `banana`, `cherry`) |
+| T-FOLD-04 | Duplicate names | Same name at the root → 409 with a clear message; same name in another folder → 201 |
+| T-FOLD-05 | `on_conflict = "rename"` | `Photos (2)`, then `Photos (3)` |
+| T-FOLD-06 | Names cleaned or refused (8 cases) | Stripped, NFC, RTLO removed; blank, `..`, `/`, `\`, 256 characters → 422 |
+| T-FOLD-07 | Depth limit | 32 levels accepted, the 33rd → 422 naming the limit |
+| T-FOLD-08 | Unknown parent | 404, nothing created |
+| T-FOLD-09 / T-SEC-10 | IDOR on folders | As another user: detail, listing, parent, file listing and upload into the folder → 404; nothing created, nothing on disk; the other user's own root is empty and independent |
+| T-FOLD-10 | Upload into a folder | Listed in the folder, not at the root; bytes still at `<user>/<file>` on disk |
+| T-FOLD-11 | Upload into an unknown folder | 404 before the body is read: no file, no row |
+| T-FOLD-12 | Summary of the cloud | Counts every folder: 3 files, 2 folders, 9 bytes |
+| T-FOLD-13 | Summary of an empty cloud | All zeros (no NULL from `SUM`) |
+| T-SEC-11 | Composite foreign keys | Direct SQL: a folder or a file in another user's folder → `IntegrityError` |
+| T-FOLD-14 | Deleting folders | Empty tree: sub-folders cascade; tree holding a file deep down → `IntegrityError` (RESTRICT) |
+| T-SEC-12 | Bounded recursion | Cycle made by hand (A in B in A): the folder still answers at once, path cut at 32 |
+| T-FOLD-15 | No folder is its own parent | `IntegrityError` on `ck_folders_not_own_parent` |
+| T-FOLD-16 | Deleting a user deletes their folders | CASCADE (folders are metadata only) |
+| T-FOLD-17 | Unique names at the root, enforced by the database | Direct SQL duplicate at the root → `IntegrityError` (`NULLS NOT DISTINCT`) |
+| T-FOLD-18 | Two requests racing for the same name | The service check is bypassed (simulated race): the `UNIQUE` constraint answers, reported as 409, still one folder |
+| T-SEC-13 | CSRF on folder creation | `text/plain` body (what another site can send without a preflight) → 422, nothing created |
 
 ### Ollama client (`tests/test_ollama_client.py`)
 
@@ -156,11 +186,11 @@ venv/bin/ruff check . && venv/bin/ruff format --check .
 Run on 2026-11-12 (Python 3.15.0, PostgreSQL 18, pytest 9.2):
 
 ```
-115 passed in 0.93s
+159 passed in 1.87s
 ```
 
 (35 tests in v0.4; v0.5 adds 80: 7 multi-user, 25 private cloud, 38 file rules,
-10 storage.)
+10 storage; v0.5.1 adds 44: 28 folders, 15 folder-name rules, 1 interface cache.)
 
 ### Checking that the tests can actually fail
 
@@ -186,6 +216,22 @@ each bug injected alone, then reverted:
 
 The same check was done for `T-SEC-04`: adding a Google Fonts `<link>` to the
 page made the test fail (`assert ['https://fon...amily=Nunito'] == []`).
+
+And for the folders of v0.5.1 (2026-11-12):
+
+| Injected bug | Detected by |
+|---|---|
+| No folder check before an upload | ❌ `T-FOLD-09` (500 from the foreign key instead of a clean 404) |
+| Folder lookup without the owner filter | ❌ `T-FOLD-09` (the other user could create inside the folder) |
+| Depth limit off by one | ❌ `T-FOLD-07` |
+| `on_conflict = "rename"` ignored | ❌ `T-FOLD-05` |
+| `NULLS NOT DISTINCT` removed from the **migration** (database downgraded, mutated migration applied, then restored) | ❌ `T-FOLD-17` and `T-FOLD-18` |
+| Race not mapped to 409 (`IntegrityError` re-raised) | ❌ `T-FOLD-18` (500) |
+| Root condition written `folder_id = NULL` instead of `IS NULL` | ✅ survived, and rightly so: SQLAlchemy already turns `column == None` into `IS NULL`. An *equivalent mutant* (same behaviour), not a gap in the tests; the docstring of `in_folder()` was corrected accordingly |
+
+This exercise also revealed a real gap: before T-FOLD-17 and T-FOLD-18 were
+written, the service's own name check hid the database constraint, so no test
+proved that the constraint existed at all.
 
 ## 4. End-to-end test with the real model
 
@@ -326,7 +372,93 @@ Also found by reading the code during this work: the closed mobile history
 drawer was only moved off-screen, so the Tab key still walked through its
 invisible links. It is now `visibility: hidden` when closed.
 
-## 9. Not covered yet
+## 9. End-to-end test: folders, follow scrolling and soft glows (v0.5.1)
+
+Performed on 2026-11-12 with Firefox 160 (headless, WebDriver BiDi) against a
+separate instance (port 8010) on the **test** database. For the scrolling
+tests, Ollama was replaced by a small fake server that streams 260 reasoning
+tokens then about 1,000 answer tokens at 33 tokens per second, so every run
+is identical. Wheel, keyboard and mouse events are real input events
+(`input.performActions`), not JavaScript calls; the browser cache is bypassed.
+
+**Follow scrolling (13 checks, all ✅)**
+
+| ID | Step | Expected |
+|---|---|---|
+| E2E-SCROLL-01 | Send a message; reasoning streams | The reasoning box follows its text (at the bottom) |
+| E2E-SCROLL-02 | Wheel up inside the reasoning box | The box stays where it was put while the text grows; the chat keeps following |
+| E2E-SCROLL-03 | Wheel down to the bottom of the box | The box follows again |
+| E2E-SCROLL-04 | Answer streams | The chat stays at the bottom (6 samples, distance ≤ 1 px) |
+| E2E-SCROLL-05 | **One** wheel notch up during the stream (the reported bug) | The view does not move any more (scrollTop identical 2 s later) while the content grows below |
+| E2E-SCROLL-06 | — | "Latest" button shown, glowing (`is-live`) |
+| E2E-SCROLL-07 | Click "Latest" | Back at the bottom, following again, button hidden |
+| E2E-SCROLL-08 | Wheel up, then wheel down to the bottom by hand | Following resumes |
+| E2E-SCROLL-09 | Page Up in the focused history | Following stops |
+| E2E-SCROLL-10 | Click (press 150 ms) in an empty area of the history | Following continues |
+| E2E-SCROLL-11 | End of the answer while scrolled up | Button visible, no longer glowing |
+| E2E-SCROLL-12 | "Latest" activated with the keyboard | Focus moves to the message field, not lost |
+| E2E-SCROLL-13 | Console | No JavaScript error |
+
+**Folders (23 checks, all ✅)**
+
+| ID | Step | Expected |
+|---|---|---|
+| E2E-FOLD-01 | Open the cloud | No breadcrumb at the root; empty state |
+| E2E-FOLD-02 | "New folder" | Inline form, "New folder" pre-selected (typing replaces it) |
+| E2E-FOLD-03 | Type "Courses", Enter | Row created; form closed; focus on the new row; summary "1 folder · 0 files" |
+| E2E-FOLD-04 | Same name again | Server message in the form, `aria-invalid="true"` |
+| E2E-FOLD-05 | Escape | Form closed, focus back on "New folder" |
+| E2E-FOLD-06 | Name `a/b` | The server's reason shown |
+| E2E-FOLD-07 | Enter on the folder row | Breadcrumb "All files › Courses", `#folder=<id>` in the address, focus on the current step, "This folder is empty", drop zone says "stored in “Courses”" |
+| E2E-FOLD-08 | Upload a file with the real file picker | Listed in Courses (API: in the folder, not at the root) |
+| E2E-FOLD-09 | Folder picker result (`webkitRelativePath`) with a `.DS_Store` | Tree recreated, 3 files, `.DS_Store` ignored |
+| E2E-FOLD-10 | Drop a folder of the same name with 232 files, 230 of them in one sub-folder, and an empty sub-folder | Renamed "Photos (2)"; all 232 files uploaded (proves the batched `readEntries()` loop); empty sub-folder created |
+| E2E-FOLD-11 | Listing | Folders first, by name, then files |
+| E2E-FOLD-12 | Server side | Tree identical to the dropped folder |
+| E2E-FOLD-13 | Open 3 levels down | Breadcrumb "All files › Courses › Photos (2) › 2026 › deep" |
+| E2E-FOLD-14 / 15 | Browser Back, then Forward | Up one level, then down again |
+| E2E-FOLD-16 | Reload | Still in the folder |
+| E2E-FOLD-17 | "All files" | Root, address cleaned, focus on the panel title |
+| E2E-FOLD-18 | Unknown folder id typed in the address | Notice, back to the root |
+| E2E-FOLD-19 | Dropped folder with an unreadable file | The folder's row: "1 item could not be uploaded. Locked/secret.txt: This file could not be read from your computer." |
+| E2E-FOLD-20 | Cancel a folder upload in the middle of a 300 MB file | Row removed; notice "0 files had already been saved"; no `.part` file left on disk |
+| E2E-FOLD-21 | Header summary | Equal to the server totals over every folder |
+| E2E-FOLD-22 | Split view | "New folder" / "Upload folder" become icons; summary on one line |
+| E2E-FOLD-23 | Console | No JavaScript error |
+
+Driver limitation: WebDriver BiDi cannot give a *directory* to an
+`<input webkitdirectory>` in this Firefox ("Is directory"), and a real drag
+from the desktop cannot be scripted. E2E-FOLD-09 therefore fires the input's
+`change` event with the exact list a browser produces (File objects carrying
+`webkitRelativePath`), and E2E-FOLD-10/19/20 dispatch a `drop` event carrying
+`FileSystemEntry`-like objects (with a `readEntries()` that returns at most
+100 entries per call, like Chromium). Everything after the browser's own
+dialog or drag (reading, folder creation, uploads, errors, cancel) is the
+real code against the real server.
+
+**Soft glows**: screenshots at device pixel ratio 2 of the New chat button,
+the RAG switch, the composer and the Upload button, in the day and night
+themes, before and after the fix. The luminance was read pixel by pixel along
+a line crossing the panel's edge: above the RAG switch (night) it jumped from
+29 to 47 in one pixel row before, and now rises gradually from 29 to 40;
+above "New chat", from 25 to 35 before, gradual after.
+
+**Regression**: the v0.5 layout script (E2E-CLOUD-04 to 11: views, keyboard,
+`inert`, drawer, mobile) was run again with identical results; the history
+drawer and the closing panel were captured in the middle of their animation:
+nothing shows beyond the edge of the chat panel.
+
+Defects found and fixed during this test:
+
+- **Stale interface after an update**: the test browser kept the previous
+  `app.css` (no `Cache-Control` header, heuristic caching) while loading the
+  new scripts. Fixed with `Cache-Control: no-cache` (T-UI-03, ARCHITECTURE §4.16).
+- **Hard line at the bottom of the history** when scrolled up: the top edge
+  already faded, the bottom did not; both edges now fade.
+- **Summary on two lines in split view** with three header buttons: the
+  secondary buttons become icons below 860 px of panel width.
+
+## 10. Not covered yet
 
 - Automated browser tests in CI (Playwright) — planned with the CI pipeline (v0.9).
 - Load testing (several concurrent generations, several concurrent uploads).
@@ -335,3 +467,5 @@ invisible links. It is now `visibility: hidden` when closed.
   logic (isolation between users) is already tested (T-USER-03/04).
 - Inline audio/video in desktop browsers (manual check), and the UI in Chrome
   and Safari.
+- The native folder dialog and a real drag from the desktop (see the driver
+  limitation in §9), and touch scrolling on a real phone.

@@ -11,6 +11,12 @@ import unicodedata
 
 # Same limit as the files.filename column (VARCHAR(255)).
 MAX_FILENAME_LENGTH = 255
+# Same limit as the folders.name column (VARCHAR(255)).
+MAX_FOLDER_NAME_LENGTH = 255
+# How deep folders can be nested (a folder at the root has depth 1). Real
+# trees rarely go past 10 levels; the limit keeps the recursive "path of a
+# folder" query bounded and stops a script from building an absurd chain.
+MAX_FOLDER_DEPTH = 32
 # When a name is too long, the extension is kept (it tells the user, and the
 # server, what the file is) as long as it is a plausible one.
 _MAX_KEPT_EXTENSION = 16
@@ -77,6 +83,19 @@ class InvalidFileNameError(ValueError):
     """The proposed file name is empty or meaningless once cleaned."""
 
 
+class InvalidFolderNameError(ValueError):
+    """The proposed folder name is empty, reserved, too long or contains a separator."""
+
+
+def _without_invisible_characters(name: str) -> str:
+    """Remove control, line/paragraph separator and bidirectional characters."""
+    return "".join(
+        char
+        for char in name
+        if unicodedata.category(char) not in _FORBIDDEN_CATEGORIES and char not in _BIDI_CONTROLS
+    )
+
+
 def clean_filename(raw: str) -> str:
     """Turn the name sent by the client into a safe DISPLAY name.
 
@@ -95,12 +114,7 @@ def clean_filename(raw: str) -> str:
     """
     name = unicodedata.normalize("NFC", raw)
     name = re.split(r"[\\/]", name)[-1]
-    name = "".join(
-        char
-        for char in name
-        if unicodedata.category(char) not in _FORBIDDEN_CATEGORIES and char not in _BIDI_CONTROLS
-    )
-    name = name.strip()
+    name = _without_invisible_characters(name).strip()
     if name in {"", ".", ".."}:
         raise InvalidFileNameError("The file name is empty once cleaned.")
     if len(name) > MAX_FILENAME_LENGTH:
@@ -110,6 +124,54 @@ def clean_filename(raw: str) -> str:
         else:
             name = name[:MAX_FILENAME_LENGTH].rstrip()
     return name
+
+
+def clean_folder_name(raw: str) -> str:
+    """Turn a folder name sent by the client into a safe DISPLAY name.
+
+    Folders only exist in the database (see the Folder model): their names
+    never reach the disk, so, as for files, the point is a tidy and
+    unambiguous name, not path traversal. Same hygiene as clean_filename
+    (NFC, invisible characters removed, spaces stripped), with one
+    difference: a name containing "/" or "\\" is REFUSED rather than cut.
+    A browser may add a path in front of a FILE name, which is then safely
+    dropped; a folder name is typed by a person, and silently turning
+    "Courses/2026" into "2026" would surprise them. Both characters are the
+    path separators of every operating system: a folder named with them
+    could never be recreated on a disk (future zip download, Samba sync).
+    Too long a name is refused too, for the same reason.
+    """
+    name = unicodedata.normalize("NFC", raw)
+    name = _without_invisible_characters(name).strip()
+    if not name:
+        raise InvalidFolderNameError("The folder name is empty.")
+    if name in {".", ".."}:
+        raise InvalidFolderNameError('"." and ".." are reserved names.')
+    if "/" in name or "\\" in name:
+        raise InvalidFolderNameError('A folder name cannot contain "/" or "\\".')
+    if len(name) > MAX_FOLDER_NAME_LENGTH:
+        raise InvalidFolderNameError(f"A folder name is limited to {MAX_FOLDER_NAME_LENGTH} characters.")
+    return name
+
+
+def first_free_name(name: str, taken: set[str]) -> str:
+    """``name`` if it is free, else "name (2)", "name (3)"... (like Windows
+    Explorer or Google Drive when a copy keeps both versions).
+
+    Used when a folder is UPLOADED next to an existing one with the same
+    name: the upload never merges into, or mixes with, existing content.
+    The suffix always fits in MAX_FOLDER_NAME_LENGTH (the name is shortened
+    if needed).
+    """
+    if name not in taken:
+        return name
+    for number in range(2, len(taken) + 2):
+        suffix = f" ({number})"
+        candidate = name[: MAX_FOLDER_NAME_LENGTH - len(suffix)] + suffix
+        if candidate not in taken:
+            return candidate
+    # Unreachable: len(taken) + 1 candidates cannot all be in ``taken``.
+    raise InvalidFolderNameError("No free name was found for this folder.")
 
 
 def guess_mime_type(filename: str) -> str:

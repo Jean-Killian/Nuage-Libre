@@ -7,8 +7,8 @@ consistent.
 
 Upload order: disk first, database last
 ---------------------------------------
-1. Check the request against the rules (name, size limit, free space)
-   BEFORE reading a single byte of the body.
+1. Check the request against the rules (name, size limit, free space,
+   destination folder) BEFORE reading a single byte of the body.
 2. Stream the bytes to disk (atomic write: complete file or nothing).
 3. Only then INSERT the row, in its own transaction.
 4. If the INSERT fails, delete the bytes again (compensating action).
@@ -39,7 +39,9 @@ from app.config import Settings
 from app.models import StoredFile
 from app.repositories.file_repository import FileRepository
 from app.repositories.file_storage import FileStorage, UnsafePathError
+from app.repositories.folder_repository import FolderRepository
 from app.services.file_policy import clean_filename, guess_mime_type, inline_media_type, needs_sandbox
+from app.services.folder_service import FolderNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -110,12 +112,16 @@ class FileService:
         chunks: AsyncIterable[bytes],
         *,
         declared_size: int | None,
+        folder_id: uuid.UUID | None = None,
     ) -> StoredFile:
-        """Store one file for ``user_id`` and return its database row.
+        """Store one file for ``user_id`` in ``folder_id`` (None = the root)
+        and return its database row.
 
         ``chunks`` is the request body, consumed as a stream: the file is
         written to disk piece by piece and never held in memory as a whole.
-        Raises InvalidFileNameError, UploadTooLargeError,
+        The folder only changes where the file is SHOWN: on disk, the bytes
+        go to "<user_id>/<file_id>" as always.
+        Raises InvalidFileNameError, FolderNotFoundError, UploadTooLargeError,
         InsufficientStorageError, IncompleteUploadError, UploadNotSavedError,
         or whatever ``chunks`` raises (e.g. the client disconnecting).
         """
@@ -128,6 +134,15 @@ class FileService:
         needed = (declared_size or 0) + self.settings.min_free_disk_bytes
         if await self.storage.free_bytes() < needed:
             raise InsufficientStorageError()
+        if folder_id is not None:
+            # A short read-only transaction, closed BEFORE the body is
+            # streamed (a 2 GB upload must not hold a database connection).
+            # The composite foreign key (folder_id, user_id) checks again at
+            # INSERT time, should the folder disappear in the meantime.
+            async with session.begin():
+                folder = await FolderRepository(session).get_for_user(folder_id, user_id)
+            if folder is None:
+                raise FolderNotFoundError(str(folder_id))
 
         # 2. Bytes to disk. The id is generated here because it is also the
         #    file's name on disk, written before the row exists.
@@ -146,6 +161,7 @@ class FileService:
                 stored = FileRepository(session).add(
                     file_id=file_id,
                     user_id=user_id,
+                    folder_id=folder_id,
                     filename=filename,
                     file_path=relative_path,
                     mime_type=guess_mime_type(filename),
@@ -171,9 +187,17 @@ class FileService:
         return stored
 
     # --- Read --------------------------------------------------------------
-    async def list_files(self, session: AsyncSession, user_id: uuid.UUID, limit: int) -> list[StoredFile]:
-        """The user's files, newest first."""
-        return await FileRepository(session).list_for_user(user_id, limit)
+    async def list_files(
+        self, session: AsyncSession, user_id: uuid.UUID, folder_id: uuid.UUID | None, limit: int
+    ) -> list[StoredFile]:
+        """The user's files in ``folder_id`` (None = the root), newest first.
+
+        An unknown folder (or someone else's) is an error, not an empty
+        list, so the client learns that the folder it shows is gone.
+        """
+        if folder_id is not None and await FolderRepository(session).get_for_user(folder_id, user_id) is None:
+            raise FolderNotFoundError(str(folder_id))
+        return await FileRepository(session).list_for_user(user_id, folder_id, limit)
 
     async def plan_download(
         self, session: AsyncSession, user_id: uuid.UUID, file_id: uuid.UUID, *, inline: bool

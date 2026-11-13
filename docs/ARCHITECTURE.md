@@ -354,8 +354,14 @@ confirms that an id exists. Details and alternatives considered:
   fails: a row never points to missing bytes.
 - **Two storage technologies, two data-access classes**: `FileRepository` (SQL)
   and `FileStorage` (disk), coordinated by `FileService`.
+- **Folders are logical** (v0.5.1): a `folders` table (adjacency list,
+  `parent_id`), never directories on disk. Composite foreign keys keep every
+  tree within one user; `UNIQUE … NULLS NOT DISTINCT` forbids duplicate names,
+  at the root too. A folder dropped from the computer is recreated by the
+  browser (folders first, then each file through the normal streamed upload):
+  the server never extracts an archive (no zip bomb, no zip slip).
 
-Full rationale: [CLOUD_STORAGE.md](CLOUD_STORAGE.md) §5.
+Full rationale: [CLOUD_STORAGE.md](CLOUD_STORAGE.md) §5 and §11.
 
 ### 4.13 Split-screen workspace
 
@@ -367,6 +373,69 @@ panel `inert`. Inside the panels, layout decisions use **container queries**
 column beside the chat when the chat panel is wide, a drawer otherwise. Below
 900 px, "split" falls back to the chat. Details: [CLOUD_STORAGE.md](CLOUD_STORAGE.md) §6.
 
+### 4.14 Following the answer while it is written (v0.5.1)
+
+While the model writes, the chat (and the reasoning box) keeps the latest
+line in view, **as long as the reader is at the bottom**. As soon as they
+scroll up, the view stays where they put it, so they can read while the model
+keeps writing; scrolling back to the bottom, or the "Latest" button that
+appears above the composer, resumes following. `followScroll()` in
+`js/app.js` implements this once and is used for both boxes.
+
+- **Why watch the wheel, touch and keys, not only `scroll`.** A model writes
+  30 to 50 tokens per second, so new content arrives between two frames. The
+  `scroll` event is delivered *after* the browser has scrolled, and by then
+  the next token may already have put the view back at the bottom: the user's
+  gesture was undone before the code could see it (the reported bug). `wheel`,
+  `touchmove` and `keydown` (↑, Page Up, Home) are delivered *before* the
+  browser scrolls, so following stops at the first notch. The `scroll` event
+  still catches everything else (scrollbar, find in page, screen readers).
+- **One scroll per frame**: the follow-up scroll runs in
+  `requestAnimationFrame`, after that frame's Markdown rendering, and checks
+  again that the user did not scroll up meanwhile.
+- **Nested boxes**: a wheel turn inside the reasoning box scrolls that box
+  only; the chat keeps following (`innerBoxScrolls()`).
+- **A click in an empty area** of the history (or on its scrollbar) pauses
+  following while the button is down and resumes it on release if the view
+  did not move.
+- **Accessibility**: the history and the reasoning box are focusable
+  (`tabindex="0"`), so they can be scrolled with the keyboard; activating
+  "Latest" moves the focus to the message field (or the history while the
+  model writes) instead of losing it; the smooth scroll is replaced by an
+  instant jump under `prefers-reduced-motion`.
+
+Tested in a real browser with real wheel and keyboard events
+([TEST_PLAN.md](TEST_PLAN.md) §9).
+
+### 4.15 Soft glows: clipping a little further out (v0.5.1)
+
+A closing panel must clip its content (it slides away instead of spilling
+over its neighbour), so the panels had `overflow: hidden`. That also cut the
+glows of the buttons near their edges (New chat, RAG switch, composer) along
+the panel's border: a straight line where the light should fade. The panels
+now use `overflow: clip` with `overflow-clip-margin: var(--glow-room)` (40 px):
+the clipping happens 40 px further out, where every glow has already faded.
+While a panel closes, the margin returns to 0. The history drawer, which slid
+in from the panel's edge, now clips itself with an animated `clip-path` that
+moves exactly with it. The glows themselves were redrawn as two offset halos
+(blue on the left, pink on the right, like the brand gradient) with a negative
+spread, which fades from inside the shape instead of drawing an outline.
+
+Measured on screenshots: above the RAG switch, the luminance jumped from 29 to
+47 in one pixel row before the fix; it now rises smoothly. Browsers without
+`overflow-clip-margin` clip at the border, as before (no regression).
+
+### 4.16 HTTP caching of the interface (v0.5.1)
+
+Static files were served without `Cache-Control`, so browsers reused them for a
+"heuristic" period (about 10 % of the file's age) without asking the server:
+after an update, a browser could combine yesterday's `app.css` with today's
+`files.js` (seen during the end-to-end tests). The page and `/static` now send
+`Cache-Control: no-cache`: the browser keeps its copy but revalidates it with
+its ETag; an unchanged file costs a `304 Not Modified` of a few bytes
+(test T-UI-03). On a local network this costs nothing noticeable, and an
+update is always seen whole.
+
 ## 5. Security
 
 | # | Risk (OWASP reference) | Mitigation in Nuage Libre | Where |
@@ -375,10 +444,11 @@ column beside the chat when the chat panel is wide, a drawer otherwise. Below
 | 2 | Injection – XSS | Markdown answers (including KaTeX output) sanitised by DOMPurify before `innerHTML`; KaTeX `trust: false`; all other text via `textContent` | `static/js/app.js` (`renderMarkdown`), T-SEC-03, T-SEC-05 |
 | 2b | Untrusted parameter (model name) | Allow-list of installed chat models, 422 otherwise | `model_catalog.py`, T-SEC-02 |
 | 2c | Software supply chain | Front-end libraries and fonts vendored, pinned, checksummed; no CDN (enforced by a test) | `static/vendor/`, `static/fonts/`, T-SEC-04 |
-| 3 | Broken access control | Every query scoped by `user_id`; another user's data answers 404 (IDOR). ⚠️ No authentication yet: the caller is always the Ghost User, access relies on Tailscale | `repositories/`, `auth.py`, T-USER-03/04; login in v0.6 |
+| 3 | Broken access control | Every query scoped by `user_id`; another user's data answers 404 (IDOR); composite foreign keys keep folder trees within one user, even for direct SQL. ⚠️ No authentication yet: the caller is always the Ghost User, access relies on Tailscale | `repositories/`, `auth.py`, T-USER-03/04, T-FOLD-09, T-SEC-11; login in v0.6 |
 | 3b | Path traversal (file download) | Paths built only from server UUIDs; typed `uuid` route parameter; ownership filter; `CHECK` constraint on `files.file_path`; containment check after `resolve()` (symlinks included) | `file_storage.py`, T-SEC-07/08, [CLOUD_STORAGE.md](CLOUD_STORAGE.md) §4.2 |
 | 3c | Stored XSS through uploaded files | Inline display only for script-free types; text shown as `text/plain`; `nosniff`; `CSP: sandbox`; HTML/SVG always downloaded | `file_policy.py`, T-SEC-06 |
-| 3d | CSRF (cross-site upload) | Upload requires a custom header and `application/octet-stream` → CORS preflight, never granted; multipart refused (415); `Cross-Origin-Resource-Policy: same-origin` on downloads | `routers/files.py`, T-FILE-07 |
+| 3d | CSRF (cross-site upload) | Upload requires a custom header and `application/octet-stream` → CORS preflight, never granted; multipart refused (415); folder creation requires `application/json` (a `text/plain` body is refused, 422); `Cross-Origin-Resource-Policy: same-origin` on downloads | `routers/files.py`, `routers/folders.py`, T-FILE-07, T-SEC-13 |
+| 3e | Unbounded recursion | Folder depth limited to 32; the recursive path query is bounded, even on a cycle made by hand | `folder_repository.py`, T-FOLD-07, T-SEC-12 |
 | 4 | Security misconfiguration | DB port bound to localhost; restricted DB role; secrets outside Git | `compose.yaml`, `db/init/` |
 | 5 | Cryptographic failures / secrets | Random passwords in `.env` (`chmod 600`, git-ignored) | `.env.example` |
 | 6 | Insecure design – data integrity | FK, CHECK constraint, atomic transactions | `models.py`, `chat_service.py` |

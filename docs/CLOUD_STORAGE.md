@@ -1,4 +1,4 @@
-# Private cloud: file storage (v0.5)
+# Private cloud: file storage (v0.5, folders v0.5.1)
 
 This document explains the private cloud of Nuage Libre: how files are
 stored, how the data model already supports several users (the "Ghost User"
@@ -18,6 +18,7 @@ architecture) and [DATABASE.md](DATABASE.md) (full data model).
 8. [API reference](#8-api-reference)
 9. [Operations](#9-operations)
 10. [Known limits and next steps](#10-known-limits-and-next-steps)
+11. [Folders (v0.5.1)](#11-folders-v051)
 
 ---
 
@@ -32,8 +33,8 @@ architecture) and [DATABASE.md](DATABASE.md) (full data model).
 | RAG preparation: storing ≠ indexing | `files.is_vectorized` (false), inactive "Add to AI memory" button, "RAG context" switch |
 
 **Out of scope on purpose** (documented in §10): deleting or renaming files,
-folders, quotas per user, authentication itself, text extraction and
-embeddings (RAG).
+quotas per user, authentication itself, text extraction and embeddings
+(RAG). Folders were added in v0.5.1: see §11.
 
 ---
 
@@ -355,9 +356,11 @@ websites cannot embed our files in an `<img>` or `<video>`.
 
 ### 4.5 Access control (IDOR)
 
-Every query is scoped by `user_id` (§2.3). Another user's file or
+Every query is scoped by `user_id` (§2.3). Another user's file, folder or
 conversation is answered with 404, exactly like a random id, so the API
-never confirms that an id exists. Identifiers are random UUIDv4s (not
+never confirms that an id exists. For folders, the database adds its own
+guarantee: composite foreign keys make it impossible to place a file or a
+folder in another user's folder, even with direct SQL access (§11.3). Identifiers are random UUIDv4s (not
 enumerable). Tested with a second user (T-USER-03, T-USER-04); the mutation
 "remove the ownership filter" is caught by T-USER-04.
 
@@ -550,10 +553,14 @@ the model has no tools to act on.
 
 | Method | Route | Description | Success | Errors |
 |---|---|---|---|---|
-| `POST` | `/api/files` | Upload one file (raw body) | 201 + `Location` | 400, 411, 413, 415, 422, 500, 507 |
-| `GET` | `/api/files?limit=200` | The caller's files, newest first (1–1000) | 200 | 422 |
+| `POST` | `/api/files?folder_id=…` | Upload one file (raw body) into a folder (root if absent) | 201 + `Location` | 400, 404, 411, 413, 415, 422, 500, 507 |
+| `GET` | `/api/files?folder_id=…&limit=200` | The files of one folder (root if absent), newest first (1–1000) | 200 | 404, 422 |
+| `GET` | `/api/files/summary` | Totals over the whole cloud: files, folders, bytes, files in the AI memory | 200 | |
 | `GET` | `/api/files/{id}/download` | Download (attachment) | 200 | 404, 422 |
 | `GET` | `/api/files/{id}/download?inline=true` | View in the browser (safe types only) | 200 | 404, 422 |
+| `POST` | `/api/folders` | Create a folder: `{"name", "parent_id", "on_conflict": "fail"\|"rename"}` | 201 + `Location` | 404, 409, 422 |
+| `GET` | `/api/folders?parent_id=…` | Sub-folders of a folder (root if absent), by name | 200 | 404, 422 |
+| `GET` | `/api/folders/{id}` | One folder and its `path` from the root (breadcrumb) | 200 | 404, 422 |
 
 ```bash
 # Upload (the name is percent-encoded: "Rapport de stage.pdf")
@@ -566,6 +573,7 @@ curl -X POST http://127.0.0.1:8000/api/files \
 ```json
 {
   "id": "eba35e3d-e284-43e5-b765-699bf0462a40",
+  "folder_id": null,
   "filename": "Rapport de stage.pdf",
   "mime_type": "application/pdf",
   "size": 182734,
@@ -607,8 +615,188 @@ out of the share (one setting) or hidden with Samba's `veto files`.
 |---|---|
 | No authentication: access relies on Tailscale | v0.6: JWT in `get_current_user_id()`, Argon2 password hashes in `users` |
 | No delete / rename of files | `DELETE /api/files/{id}` (bytes then row, same compensation logic) |
+| No delete / rename / move of folders | Rename = one `UPDATE`; delete = delete the files' bytes first (RESTRICT protects them), then the folder row (sub-folders follow by CASCADE); move = refuse a new parent that is a descendant (cycle), checked by the recursive query |
+| Dropping files onto a folder ROW does not upload into it (only into the folder being shown) | Per-row drop targets |
 | Possible orphan files after a crash between rename and `INSERT` | Clean-up job comparing the folder with the table |
 | No quota per user | Sum of `files.size` per user checked in `FileService.upload()` |
 | No integrity hash | SHA-256 computed while streaming (also enables deduplication) |
 | No antivirus scan | ClamAV (local) before indexing, if files are shared between users |
 | Inline audio/video under the browsers' native players not verified in an automated browser (the headless Firefox used for E2E does not open audio documents at all, even without any security header) | Manual check in desktop Firefox / Safari / Chrome |
+
+---
+
+## 11. Folders (v0.5.1)
+
+Folders organise the cloud: create them, open them, upload into them, and
+upload a whole folder from the computer, sub-folders included.
+
+### 11.1 Folders exist only in the database
+
+On disk, **nothing changes**: every file stays at `<user_id>/<file_id>`
+whatever folder it is shown in. A folder is a row of the `folders` table,
+and a file "is in" a folder through `files.folder_id`.
+
+| Consequence | Why it matters |
+|---|---|
+| A folder name never reaches the file system | The path traversal defence (§4.2) is untouched: no `../`, no forbidden characters, no length limit of the disk to care about |
+| Renaming or moving a folder (future) is one `UPDATE` | The alternative, real directories, would move gigabytes or break paths stored in the table |
+| The storage folder, seen through Samba, still has no structure | Expected: the database is the index of the cloud (§9, backups already save both) |
+
+### 11.2 The tree: an adjacency list
+
+```mermaid
+erDiagram
+    USERS ||--o{ FOLDERS : owns
+    FOLDERS |o--o{ FOLDERS : "contains (parent_id)"
+    FOLDERS |o--o{ FILES : "contains (folder_id)"
+    USERS ||--o{ FILES : owns
+```
+
+Each folder points to its parent (`parent_id`, NULL = at the root). Other
+classic models of a tree in SQL were considered:
+
+| Model | Reading one level | Path of a folder | Moving a sub-tree | Verdict |
+|---|---|---|---|---|
+| **Adjacency list** (`parent_id`) | One indexed query | One recursive query (`WITH RECURSIVE`) | One `UPDATE` | **Chosen**: simplest to keep consistent, every need is covered |
+| Materialised path (`/a/b/c`, `ltree`) | `LIKE 'a/b/%'` | Read directly | Rewrite every descendant's path | Duplicates information that can go stale |
+| Nested sets (left/right numbers) | Range query | Range query | Renumber half the table | Built for read-only trees |
+| Closure table (all ancestor pairs) | Join | Join | Delete and insert many pairs | Powerful but heavy for a personal cloud |
+
+The only recursive need is the breadcrumb ("All files / Courses / 2026"):
+`FolderRepository.lineage()` answers it in **one** query instead of one per
+level.
+
+### 11.3 Integrity guaranteed by PostgreSQL
+
+| Rule | Mechanism | Test |
+|---|---|---|
+| A folder belongs to exactly one user; deleting the user deletes their folders (metadata only) | `user_id NOT NULL`, FK `ON DELETE CASCADE` | T-FOLD-16 |
+| A folder's parent belongs to the **same** user | Composite FK `(parent_id, user_id) → folders (id, user_id)` | T-SEC-11 |
+| A file's folder belongs to the **same** user | Composite FK `(folder_id, user_id) → folders (id, user_id)` | T-SEC-11 |
+| Two folders side by side never share a name, **at the root too** | `UNIQUE (user_id, parent_id, name) NULLS NOT DISTINCT` | T-FOLD-04, T-FOLD-17 |
+| A folder that still contains files (even deep down) cannot be deleted | `files.folder_id` FK `ON DELETE RESTRICT` (sub-folders: `CASCADE`) | T-FOLD-14 |
+| A folder is never its own parent | `CHECK (parent_id <> id)` | T-FOLD-15 |
+| A name is never empty | `CHECK (name <> '')` | T-FOLD-06 |
+
+Two details are worth explaining:
+
+- **Composite foreign keys.** A plain `parent_id REFERENCES folders (id)`
+  only says "the parent exists". Referencing the *pair* `(id, user_id)` also
+  says "and it has the same owner": a buggy service or a forged request can
+  no longer hang a folder, or a file, under someone else's tree. PostgreSQL
+  requires the referenced columns to be unique together, hence the extra
+  `UNIQUE (id, user_id)` (always true, since `id` is the primary key).
+- **`NULLS NOT DISTINCT`** (PostgreSQL 15+). In SQL, `NULL = NULL` is not
+  true, so a normal `UNIQUE (user_id, parent_id, name)` lets two "Photos"
+  folders coexist at the root, where `parent_id` is NULL. The option treats
+  the root as one place. A mutation test removed it from the migration: the
+  two tests T-FOLD-17 and T-FOLD-18 failed.
+
+### 11.4 Depth and cycles
+
+- A folder can be nested at most `MAX_FOLDER_DEPTH` = **32** levels deep
+  (422 beyond, T-FOLD-07). Real trees rarely exceed 10; the limit keeps the
+  recursive query bounded.
+- The recursive query itself stops at that depth (`level < max_depth`). A
+  cycle (A inside B inside A) cannot be created through the API (a folder
+  only receives a parent that already exists, and there is no "move" yet),
+  but even one made by hand in the database cannot make PostgreSQL loop
+  forever: T-SEC-12 creates one and the request still answers at once.
+- The future "move" operation will have to refuse a new parent that is a
+  descendant of the folder (one call to the same recursive query).
+
+### 11.5 Names and conflicts
+
+`clean_folder_name()` applies the same hygiene as file names (NFC, control
+and bidirectional characters removed, spaces stripped) with one difference:
+a name containing `/` or `\` is **refused** (422) instead of being cut. A
+browser may prefix a *file* name with a path, which is safely dropped; a
+folder name is typed by a person, and silently turning "Courses/2026" into
+"2026" would surprise them.
+
+When the name is already taken in the same parent, the client chooses
+(`on_conflict`):
+
+| Mode | Used by | Result |
+|---|---|---|
+| `fail` (default) | "New folder" (a name typed by the user) | 409 "A folder with this name already exists here." shown in the form |
+| `rename` | Folder uploads | "Photos (2)", "Photos (3)"… like Windows or Google Drive: an upload never merges into existing content |
+
+If two requests race for the same name, both pass the service's check; the
+`UNIQUE` constraint stops the second `INSERT`, which is reported as 409, not
+as a 500 or a duplicate (T-FOLD-18).
+
+### 11.6 Uploading a whole folder
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant B as Browser (js/files.js)
+    participant S as FastAPI
+    U->>B: drops "Photos" (or picks it)
+    B->>B: reads the tree (FileSystemEntry API, or webkitRelativePath)
+    loop each folder, parents first
+        B->>S: POST /api/folders {name, parent_id, on_conflict: "rename"}
+        S-->>B: 201 {id, name: "Photos (2)" if taken}
+    end
+    loop each file, one at a time
+        B->>S: POST /api/files?folder_id=<id> (raw body, streamed)
+        S-->>B: 201
+    end
+    B->>U: one row in the queue, global progress, then a notice
+```
+
+**Why the browser recreates the tree** instead of sending one archive (a
+`.zip` extracted by the server):
+
+- each file reuses the streamed upload (§5.1): constant memory, size limit
+  checked before reading, per-file errors, cancellation;
+- the server never extracts an archive, so two classic attacks simply do
+  not exist: **zip bombs** (a tiny archive that expands to terabytes) and
+  **zip slip** (an entry named `../../.ssh/authorized_keys` written outside
+  the target folder during extraction).
+
+**Two sources, one plan.** The folder picker (`<input webkitdirectory>`)
+gives a flat list of files, each with its path (`Photos/2026/a.jpg`); the
+folder list is rebuilt from those paths. A drop gives a
+`FileSystemDirectoryEntry`, walked recursively; its `readEntries()` returns
+the content **in batches** (100 entries at a time in Chromium) and must be
+called until it returns an empty batch, a classic pitfall (E2E test with
+230 files in one folder). Only the drop sees empty sub-folders.
+
+| Situation | Behaviour |
+|---|---|
+| More than 10,000 files | Refused before anything is sent (reading a `node_modules` would freeze the tab) |
+| `.DS_Store`, `Thumbs.db`, `desktop.ini` | Ignored: operating system files, not the user's data |
+| A file cannot be read from the computer | Reported in the folder's row; the other files are sent |
+| A sub-folder cannot be created (e.g. too deep) | Its files are reported, the rest of the tree is sent |
+| The server cannot be reached | The folder stops at once (no point trying the next files) |
+| Cancel | The file being sent is deleted by the server (as in §3.2); files already saved and folders already created are **kept**, and the notice says how many |
+
+### 11.7 Interface
+
+- **Breadcrumb** under the panel title (hidden at the root, where it would
+  only repeat "My cloud"); a long path scrolls sideways, its end stays in
+  view.
+- **Address and history**: the current folder is in the URL
+  (`#folder=<uuid>`), so the browser's Back button goes up, Forward goes
+  down, a reload stays in place. A malformed value is ignored; an unknown
+  folder (deleted, stale bookmark) brings the user back to the root with a
+  notice.
+- **Focus**: after opening a folder, the focus moves to the current step of
+  the breadcrumb (or to the panel's title at the root), so screen readers
+  announce where the user arrived. A folder row is one button (click,
+  Enter or Space).
+- **"New folder"** opens an inline form with a free name pre-selected
+  ("New folder", or "New folder (2)"): typing replaces it, Enter creates,
+  Escape cancels. The server's message is shown in the form
+  (`aria-invalid`, `role="alert"`).
+- **Summary** in the header: totals of the *whole* cloud
+  (`GET /api/files/summary`, one aggregate query), since the list only
+  shows one folder. The same totals feed the RAG status line of the chat.
+- Header buttons: "New folder" and "Upload folder" become icons in a medium
+  panel (container query); "Upload folder" is hidden on phones and tablets,
+  which have no folder picker.
+- **CSRF**: folder creation is a JSON request; another website cannot send
+  `application/json` without a CORS preflight, and a `text/plain` body is
+  not read as JSON (422, T-SEC-13).

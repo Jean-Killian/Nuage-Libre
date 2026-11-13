@@ -354,20 +354,31 @@ button {
 
 .panel {
   position: relative;
-  /* overflow: hidden also sets the panel's minimum width to 0, which is
-     what allows a "0fr" column to really close. */
+  /* min-width: 0 is what allows a "0fr" column to really close. */
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  /* A closing panel must clip its content (it slides away instead of
+     spilling over its neighbour). But "overflow: hidden" also cut the soft
+     glows of the buttons near the edges (New chat, RAG switch, composer)
+     with a hard, straight line. "overflow: clip" + "overflow-clip-margin"
+     clips a little FURTHER out: the glows have --glow-room to fade out
+     naturally. (A browser without overflow-clip-margin clips at the edge,
+     as before.) "clip" is also not a scroll container, so focusing an
+     element can never scroll the panel itself by accident. */
+  overflow: clip;
+  overflow-clip-margin: var(--glow-room);
   transition: opacity 360ms ease 140ms, visibility 0s;
 }
 
 /* A hidden panel fades out quickly, then stops being rendered once the
    width animation is over (same technique as the sky layers). js/layout.js
-   also makes it `inert`: no focus, no click, ignored by screen readers. */
+   also makes it `inert`: no focus, no click, ignored by screen readers.
+   While it closes, it clips exactly at its edge: its content, wider than
+   the shrinking column, must not show beyond it. */
 .panel.is-collapsed {
   opacity: 0;
   visibility: hidden;
+  overflow-clip-margin: 0px;
   transition: opacity 220ms ease, visibility 0s linear 560ms;
 }
 
@@ -622,20 +633,29 @@ body.is-generating .brand-mascot {
      blur is not available in every browser, so it cannot be relied on). */
   background: var(--sky-base);
   border-radius: 0 32px 32px 0;
-  box-shadow: 0 0 60px rgba(15, 23, 42, 0.35);
+  /* Shadow cast to the right only (over the dimmed chat). */
+  box-shadow: 24px 0 60px -24px rgba(15, 23, 42, 0.45);
   transform: translateX(-105%);
+  /* The panel leaves room around its edges for glows (see .panel), so the
+     drawer clips ITSELF at the panel's edge: the left inset grows exactly
+     as fast as the drawer moves left (same percentage, same timing), so no
+     part of it ever shows beyond the panel. The negative right inset keeps
+     room for its shadow. */
+  clip-path: inset(0 -90px 0 105%);
   /* Closed = also invisible to the keyboard: without visibility:hidden, Tab
      would walk through links that are off-screen. visibility switches at
      the END of the slide-out and at the START of the slide-in. */
   visibility: hidden;
   transition: background var(--theme-fade) ease, transform 320ms var(--ease-out),
-    visibility 0s linear 320ms;
+    clip-path 320ms var(--ease-out), visibility 0s linear 320ms;
 }
 
 .sidebar.is-open {
   transform: translateX(0);
+  clip-path: inset(0 -90px 0 0);
   visibility: visible;
-  transition: background var(--theme-fade) ease, transform 320ms var(--ease-out), visibility 0s;
+  transition: background var(--theme-fade) ease, transform 320ms var(--ease-out),
+    clip-path 320ms var(--ease-out), visibility 0s;
 }
 
 [data-theme="pro"] .sidebar {
@@ -798,6 +818,7 @@ body.is-generating .brand-mascot {
     width: 280px;
     flex-shrink: 0;
     transform: none;
+    clip-path: none;
     visibility: visible;
     background: var(--surface);
     -webkit-backdrop-filter: blur(18px) saturate(1.2);
@@ -1070,9 +1091,12 @@ body.is-generating .brand-mascot {
   flex: 1;
   overflow-y: auto;
   padding: 10px clamp(10px, 3cqi, 28px) 24px;
-  /* Messages fade out softly under the top bar instead of being cut. */
-  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 28px);
-  mask-image: linear-gradient(180deg, transparent 0, #000 28px);
+  /* Messages fade out softly at both edges instead of being cut by a
+     straight line (under the top bar, and above the composer while the
+     reader is scrolled up). The bottom fade (18px) is narrower than the
+     bottom padding (24px): at the very bottom, nothing is faded. */
+  -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 28px, #000 calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(180deg, transparent 0, #000 28px, #000 calc(100% - 18px), transparent 100%);
 }
 
 .messages {
@@ -1381,7 +1405,75 @@ body.is-generating .brand-mascot {
 /* ---- 10. Composer -------------------------------------------------------- */
 
 .composer-wrap {
+  position: relative;      /* anchor of the "Latest" button */
   padding: 8px clamp(8px, 3cqi, 28px) max(6px, env(safe-area-inset-bottom));
+}
+
+/* "Latest" button: floats just above the composer when the latest message
+   is out of view (js/app.js). The `hidden` attribute shows and hides it; the
+   pop-in animation replays each time it appears. Fill mode "backwards", not
+   "both": once finished, the animation must not hold `transform`, or the
+   hover effect could never apply. */
+.jump-latest {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  z-index: 5;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 15px 8px 11px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-strong);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+  box-shadow: var(--bubble-shadow), 0 0 0 1px var(--hairline);
+  font-size: 0.78rem;
+  font-weight: 800;
+  color: var(--text-soft);
+  transform: translateX(-50%);
+  transition: transform 240ms var(--ease-soft), color 200ms ease, box-shadow 300ms ease;
+  animation: jump-in 340ms var(--ease-soft) backwards;
+}
+
+.jump-latest:hover {
+  color: var(--accent-ink);
+  transform: translateX(-50%) translateY(-2px);
+}
+
+/* The model is still writing below: the button glows, its arrow nudges. */
+.jump-latest.is-live {
+  color: var(--text);
+  box-shadow: var(--bubble-shadow), 0 0 0 1px var(--hairline), var(--send-glow);
+}
+
+.jump-latest.is-live svg {
+  animation: jump-nudge 1.3s ease-in-out infinite;
+}
+
+@keyframes jump-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(10px) scale(0.9);
+  }
+}
+
+@keyframes jump-nudge {
+  50% { transform: translateY(2px); }
+}
+
+/* The history and the reasoning box can take the keyboard focus, to be
+   scrolled with the arrow keys. Their ring is drawn INSIDE (an outer ring
+   would sit under the neighbouring elements). */
+.chat:focus-visible,
+.thought-text:focus-visible {
+  box-shadow: none;
+  outline: 2px solid var(--accent-ink);
+  outline-offset: -3px;
+}
+
+.chat:focus-visible {
+  border-radius: 24px;
 }
 
 .composer {

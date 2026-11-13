@@ -1,8 +1,12 @@
 """HTTP routes of the private cloud (presentation layer).
 
-    POST /api/files                  upload one file           -> 201 Created
-    GET  /api/files                  the caller's files, newest first
+    POST /api/files?folder_id=...    upload one file (into a folder) -> 201 Created
+    GET  /api/files?folder_id=...    the files of a folder, newest first
+    GET  /api/files/summary          totals over the whole cloud
     GET  /api/files/{id}/download    download it (or view it with ?inline=true)
+
+``folder_id`` is optional: absent means the root of the cloud. Folders
+themselves are managed by app/routers/folders.py.
 
 Upload protocol: the request body IS the file
 ----------------------------------------------
@@ -45,8 +49,8 @@ from starlette.requests import ClientDisconnect
 
 from app.auth import get_current_user_id
 from app.database import get_session
-from app.dependencies import get_file_service
-from app.schemas import FileOut
+from app.dependencies import get_file_service, get_folder_service
+from app.schemas import CloudSummaryOut, FileOut
 from app.services.file_policy import InvalidFileNameError
 from app.services.file_service import (
     CloudFileNotFoundError,
@@ -56,6 +60,7 @@ from app.services.file_service import (
     UploadNotSavedError,
     UploadTooLargeError,
 )
+from app.services.folder_service import FolderNotFoundError, FolderService
 
 router = APIRouter(prefix="/api/files", tags=["files"])
 
@@ -95,6 +100,7 @@ def _human_size(num_bytes: int) -> str:
     },
     responses={
         400: {"description": "Upload interrupted before the end of the file"},
+        404: {"description": "Destination folder not found (or owned by another user)"},
         411: {"description": "Content-Length header missing (e.g. chunked transfer)"},
         413: {"description": "File larger than NUAGE_MAX_UPLOAD_BYTES"},
         415: {"description": "Body is not application/octet-stream"},
@@ -112,6 +118,7 @@ async def upload_file(
         max_length=4096,
         description="Name of the file, percent-encoded UTF-8 (JavaScript: encodeURIComponent(file.name)).",
     ),
+    folder_id: uuid.UUID | None = Query(default=None, description="Destination folder; absent = the root."),
     user_id: uuid.UUID = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
     service: FileService = Depends(get_file_service),
@@ -150,10 +157,20 @@ async def upload_file(
     # --- 2. Business rules and storage (service layer) ---------------------
     try:
         stored = await service.upload(
-            session, user_id, raw_filename, request.stream(), declared_size=int(content_length)
+            session,
+            user_id,
+            raw_filename,
+            request.stream(),
+            declared_size=int(content_length),
+            folder_id=folder_id,
         )
     except InvalidFileNameError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)) from None
+    except FolderNotFoundError:
+        # Checked before the body is read: refusing costs no bandwidth.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Destination folder not found."
+        ) from None
     except UploadTooLargeError as exc:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE,
@@ -181,15 +198,34 @@ async def upload_file(
     return stored
 
 
-@router.get("", response_model=list[FileOut])
+@router.get(
+    "",
+    response_model=list[FileOut],
+    responses={404: {"description": "Folder not found (or owned by another user)"}},
+)
 async def list_files(
+    folder_id: uuid.UUID | None = Query(default=None, description="Folder to list; absent = the root."),
     limit: int = Query(default=200, ge=1, le=1000),
     user_id: uuid.UUID = Depends(get_current_user_id),
     session: AsyncSession = Depends(get_session),
     service: FileService = Depends(get_file_service),
 ):
-    """The caller's files, newest first (``file_path`` is never exposed)."""
-    return await service.list_files(session, user_id, limit)
+    """The caller's files in one folder, newest first (``file_path`` is never exposed)."""
+    try:
+        return await service.list_files(session, user_id, folder_id, limit)
+    except FolderNotFoundError:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Folder not found.") from None
+
+
+@router.get("/summary", response_model=CloudSummaryOut)
+async def cloud_summary(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    session: AsyncSession = Depends(get_session),
+    service: FolderService = Depends(get_folder_service),
+):
+    """Number of files and folders, total size and files in the AI memory,
+    over the WHOLE cloud of the caller (the file list only shows one folder)."""
+    return await service.summary(session, user_id)
 
 
 @router.get(

@@ -1,7 +1,7 @@
 # Tool configuration (the app is not packaged; dependencies are in requirements*.txt).
 [project]
 name = "nuage-libre"
-version = "0.5.0"
+version = "0.5.1"
 description = "Self-hosted private cloud and AI chat backed by local LLMs."
 requires-python = ">=3.12"
 

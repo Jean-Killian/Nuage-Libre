@@ -12,8 +12,8 @@ Status: ✅ evidence exists · 🟡 partial · ❌ not started
 | CP | Evidence in this repository | Status | Missing |
 |---|---|---|---|
 | **CP1** Installer et configurer son environnement de travail | Python venv, `requirements*.txt`, Podman + `compose.yaml`, `.env` config, Ruff, VS Code Remote-SSH over Tailscale, Bazzite server setup | ✅ | Screenshot/description of the dev setup in the report |
-| **CP2** Développer des interfaces utilisateur | `static/` (HTML + 4 CSS + 5 JS files): own visual identity (mascot, cloud bubbles), 3 themes built on design tokens, Canvas animation, **split-screen workspace** (file manager + chat, 3 view modes animated with CSS grid, **container queries**, `inert` hidden panel), **drag & drop upload** with progress bars, cancel and keyboard alternative, responsive (phone fallback), streaming display, model menu, Markdown rendering, ARIA (radio group, `role="switch"`, `progressbar`, `aria-disabled`, `aria-live`), keyboard support, `prefers-reduced-motion`, contrast-checked colours, XSS-safe rendering, no CDN (`docs/ARCHITECTURE.md` §4.10, `docs/CLOUD_STORAGE.md` §6) | ✅ | Figma mock-ups of the 3 themes, full RGAA audit |
-| **CP3** Développer des composants métier | `app/services/chat_service.py` (orchestration, transaction), `ollama_client.py` (protocol, typed errors), `file_service.py` (upload rules, disk-then-database consistency with compensation, download policy), `file_policy.py` (pure, unit-tested rules: names, MIME types, safe preview), `auth.py` (identity seam), Pydantic validation, defensive error handling | ✅ | Authentication module (v0.6) |
+| **CP2** Développer des interfaces utilisateur | `static/` (HTML + 4 CSS + 5 JS files): own visual identity (mascot, cloud bubbles), 3 themes built on design tokens, Canvas animation, **split-screen workspace** (file manager + chat, 3 view modes animated with CSS grid, **container queries**, `inert` hidden panel), **drag & drop upload** with progress bars, cancel and keyboard alternative, **folders** (breadcrumb, browser history, focus management, inline creation form, whole-folder upload with the File System Entry API), **chat that follows the answer without stealing the scroll** (intent read from wheel / touch / keys), soft glows (`overflow-clip-margin`), responsive (phone fallback), streaming display, model menu, Markdown rendering, ARIA (radio group, `role="switch"`, `progressbar`, `aria-disabled`, `aria-live`), keyboard support, `prefers-reduced-motion`, contrast-checked colours, XSS-safe rendering, no CDN (`docs/ARCHITECTURE.md` §4.10, `docs/CLOUD_STORAGE.md` §6) | ✅ | Figma mock-ups of the 3 themes, full RGAA audit |
+| **CP3** Développer des composants métier | `app/services/chat_service.py` (orchestration, transaction), `ollama_client.py` (protocol, typed errors), `file_service.py` (upload rules, disk-then-database consistency with compensation, download policy), `file_policy.py` (pure, unit-tested rules: names, MIME types, safe preview), `folder_service.py` (ownership, depth, name conflicts settled by the database on a race), `auth.py` (identity seam), Pydantic validation, defensive error handling | ✅ | Authentication module (v0.6) |
 | **CP4** Contribuer à la gestion d'un projet informatique | VS Code Kanban board (`.vscode/vscode-kanban.json`), Git history, roadmap in README | 🟡 | Regular small commits, sprint/iteration notes, retrospective |
 
 ## AT2 — Concevoir et développer une application sécurisée organisée en couches
@@ -22,14 +22,14 @@ Status: ✅ evidence exists · 🟡 partial · ❌ not started
 |---|---|---|---|
 | **CP5** Analyser les besoins et maquetter une application | Persona & empathy map, functional tree, user flow (`01_Project_Management/`), HTML prototype (`04_UI_Mockup/`) | 🟡 | Use-case diagram, Figma screens, user stories with acceptance criteria |
 | **CP6** Définir l'architecture logicielle | `docs/ARCHITECTURE.md`: layers, dependency injection, sequence diagrams, design decisions; `docs/CLOUD_STORAGE.md`: storage architecture (bytes on disk / index in PostgreSQL), streaming upload justified by a measurement (tmpfs), "seam" pattern for future authentication, eco-design (constant memory, no double write) | ✅ | Deployment diagram (v0.9) |
-| **CP7** Concevoir et mettre en place une base de données relationnelle | `docs/DATABASE.md`: business rules R1–R14, MCD, MLD, MPD with `users` and `files`; FK with deliberate `CASCADE` vs `RESTRICT`, `UNIQUE`, `CHECK` constraints (path traversal stopped in the database), composite indexes matching the queries; roles with least privilege; verified rights (as `nuage_app`) | ✅ | Test data set (seed script) |
-| **CP8** Développer des composants d'accès aux données SQL et NoSQL | `app/repositories/`: parameterised queries scoped by owner, eager loading, transactions; `file_storage.py`: file-system data access (atomic write, `fsync`, containment check); Alembic migrations including two data migrations (`UPDATE … FROM` backfill; Ghost User seed + nullable → backfill → NOT NULL), tested on a non-empty database and for reversibility | 🟡 | NoSQL/vector part: pgvector embeddings for RAG (v0.7) |
+| **CP7** Concevoir et mettre en place une base de données relationnelle | `docs/DATABASE.md`: business rules R1–R19, MCD (with a reflexive association), MLD, MPD with `users`, `files` and `folders` (tree as an adjacency list, **composite foreign keys** keeping a tree within one owner, `UNIQUE NULLS NOT DISTINCT`); FK with deliberate `CASCADE` vs `RESTRICT`, `UNIQUE`, `CHECK` constraints (path traversal stopped in the database), composite indexes matching the queries; roles with least privilege; verified rights (as `nuage_app`) | ✅ | Test data set (seed script) |
+| **CP8** Développer des composants d'accès aux données SQL et NoSQL | `app/repositories/`: parameterised queries scoped by owner, eager loading, transactions; `file_storage.py`: file-system data access (atomic write, `fsync`, containment check); `folder_repository.py`: bounded recursive query (`WITH RECURSIVE`) for the path of a folder, aggregate query with `FILTER` for the totals; Alembic migrations including two data migrations (`UPDATE … FROM` backfill; Ghost User seed + nullable → backfill → NOT NULL), tested on a non-empty database and for reversibility | 🟡 | NoSQL/vector part: pgvector embeddings for RAG (v0.7) |
 
 ## AT3 — Préparer le déploiement d'une application sécurisée
 
 | CP | Evidence | Status | Missing |
 |---|---|---|---|
-| **CP9** Préparer et exécuter les plans de tests | `docs/TEST_PLAN.md`: 115 automated tests (unit, integration, security: path traversal, stored XSS, IDOR, CSRF), isolated test DB and storage folder, impersonation of a second user, manual mutation checks (6 injected bugs, all caught), scripted end-to-end browser tests (17 steps for v0.5) | ✅ | Automated browser tests in CI, load test |
+| **CP9** Préparer et exécuter les plans de tests | `docs/TEST_PLAN.md`: 159 automated tests (unit, integration, security: path traversal, stored XSS, IDOR, CSRF, bounded recursion), isolated test DB and storage folder, impersonation of a second user, manual mutation checks (13 injected bugs including one in a **migration**: 12 caught, 1 equivalent mutant explained), scripted end-to-end browser tests with real input events (17 steps for v0.5, 36 for v0.5.1, with a deterministic fake LLM), pixel measurements of a visual fix | ✅ | Automated browser tests in CI, load test |
 | **CP10** Préparer et documenter le déploiement | README "Getting started", `compose.yaml`, `db/init/` bootstrap, backup/restore procedure | 🟡 | Containerfile for the app, systemd/Quadlet service, production checklist |
 | **CP11** Contribuer à la mise en production dans une démarche DevOps | Ruff + pytest commands ready to automate | ❌ | CI pipeline (GitHub Actions: lint, tests with a PostgreSQL service, image build) |
 
@@ -85,3 +85,39 @@ Status: ✅ evidence exists · 🟡 partial · ❌ not started
   text is shown as plain text, and `nosniff` + CSP `sandbox` protect the rest.
 - **Why container queries?** In split-screen, the chat panel's width, not the
   screen's, decides its layout (history as a column or a drawer).
+- **Why are folders not real directories on the disk?** A folder only exists in
+  the database: no user-chosen name ever reaches the file system (the path
+  traversal defence is unchanged), and renaming or moving a folder will be one
+  `UPDATE` instead of moving gigabytes.
+- **How can't a file end up in someone else's folder?** Composite foreign keys:
+  `(folder_id, user_id)` references `folders (id, user_id)`, so PostgreSQL itself
+  checks that the folder has the same owner, even for a direct SQL `INSERT`
+  (T-SEC-11).
+- **Why `NULLS NOT DISTINCT`?** In SQL `NULL = NULL` is not true, so a plain
+  `UNIQUE (user_id, parent_id, name)` lets two "Photos" folders coexist at the
+  root. The option (PostgreSQL 15+) treats the root as one place. Removing it
+  from the migration made two tests fail.
+- **Your service already checks duplicate names: why the constraint too?** Two
+  requests can pass the check at the same time (race condition). The constraint
+  settles it and the service turns the error into a 409 (T-FOLD-18).
+- **What is an equivalent mutant?** A mutation that does not change behaviour:
+  `folder_id == None` instead of `IS NULL` survived because SQLAlchemy already
+  translates it. It is not a missing test; I documented it instead of writing a
+  useless one.
+- **Why not upload a folder as a zip?** The server would have to extract it:
+  zip bombs (tiny archive, terabytes once extracted) and zip slip (an entry named
+  `../../.ssh/authorized_keys`). The browser recreates the folders and sends each
+  file through the normal streamed upload: those attacks simply do not exist.
+- **Why did scrolling up not work while the model was writing?** The code reacted
+  to the `scroll` event, which arrives *after* the browser has scrolled; at
+  50 tokens/s the next token had already pulled the view back down. `wheel`,
+  `touchmove` and `keydown` arrive *before*, so following stops at the first
+  notch. Verified with real wheel events in Firefox.
+- **Where did the straight lines around the glows come from?** The panels clipped
+  their content with `overflow: hidden` exactly at their border, so a glow near
+  the border was cut. `overflow: clip` + `overflow-clip-margin: 40px` clips
+  40 px further out; the fix was measured on the pixels (a jump from 29 to 47 in
+  luminance became a smooth gradient).
+- **Why `Cache-Control: no-cache` on static files?** Without it, a browser may
+  reuse yesterday's CSS with today's JavaScript after an update. `no-cache` still
+  caches, but revalidates with the ETag: an unchanged file costs a 304.

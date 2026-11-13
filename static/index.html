@@ -14,7 +14,7 @@
     static/js/theme.js         theme switcher (+ circular reveal animation)
     static/js/layout.js        view switcher: split-screen / chat / files
     static/js/sky.js           living backgrounds: drifting clouds, starry sky
-    static/js/files.js         file manager: list, drag & drop upload, download
+    static/js/files.js         file manager: folders, drag & drop upload, download
     static/js/app.js           chat logic: API calls, streaming, conversations
     static/vendor/             pinned third-party libraries: marked, DOMPurify,
                                highlight.js, KaTeX (see its README)
@@ -135,6 +135,14 @@
       <path d="M19.5 3v3M18 4.5h3" />
     </svg>
   </template>
+  <!-- Folder: a rounded folder with a tiny cloud on its tab (brand). -->
+  <template id="icon-folder">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+      <path d="M3.5 8.2V6.6A2.1 2.1 0 0 1 5.6 4.5h3.3c.6 0 1.1.3 1.5.7l1.3 1.6h6.7a2.1 2.1 0 0 1 2.1 2.1v8.6a2.1 2.1 0 0 1-2.1 2.1H5.6a2.1 2.1 0 0 1-2.1-2.1Z" />
+      <path d="M3.5 9.4h17" />
+    </svg>
+  </template>
   <template id="icon-close">
     <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4"
          stroke-linecap="round" aria-hidden="true" focusable="false">
@@ -250,19 +258,53 @@
         <div class="panel-inner files">
           <header class="files-header">
             <div class="files-heading">
-              <h2 id="files-title" class="files-title">My cloud</h2>
+              <h2 id="files-title" class="files-title" tabindex="-1">My cloud</h2>
               <p id="files-summary" class="files-summary">Loading your files…</p>
             </div>
-            <button id="upload-btn" type="button" class="upload-btn">
-              <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"
-                   stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
-                <path d="M12 19V7M6.5 12.5 12 7l5.5 5.5M5 4h14" />
-              </svg>
-              <span>Upload</span>
-            </button>
-            <!-- Native picker, opened by the buttons above and below. -->
+            <!-- Secondary actions (frosted pills), then the primary one
+                 (gradient). In a narrow panel the secondary buttons keep
+                 only their icon; their aria-label still names them. -->
+            <div class="files-actions">
+              <button id="new-folder-btn" type="button" class="files-action-btn" aria-label="New folder"
+                      title="Create a folder here">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <path d="M20.5 12.5V8.9a2.1 2.1 0 0 0-2.1-2.1h-6.7l-1.3-1.6a2 2 0 0 0-1.5-.7H5.6a2.1 2.1 0 0 0-2.1 2.1v10.8a2.1 2.1 0 0 0 2.1 2.1h7" />
+                  <path d="M18 15.5v5M15.5 18h5" />
+                </svg>
+                <span class="files-action-label">New folder</span>
+              </button>
+              <button id="upload-folder-btn" type="button" class="files-action-btn" aria-label="Upload a folder"
+                      title="Upload a whole folder, with its sub-folders">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <path d="M3.5 8.2V6.6A2.1 2.1 0 0 1 5.6 4.5h3.3c.6 0 1.1.3 1.5.7l1.3 1.6h6.7a2.1 2.1 0 0 1 2.1 2.1v8.6a2.1 2.1 0 0 1-2.1 2.1H5.6a2.1 2.1 0 0 1-2.1-2.1Z" />
+                  <path d="M12 16.5v-6M9.5 13l2.5-2.5 2.5 2.5" />
+                </svg>
+                <span class="files-action-label">Upload folder</span>
+              </button>
+              <button id="upload-btn" type="button" class="upload-btn">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <path d="M12 19V7M6.5 12.5 12 7l5.5 5.5M5 4h14" />
+                </svg>
+                <span>Upload</span>
+              </button>
+            </div>
+            <!-- Native pickers, opened by the buttons above and the drop zone.
+                 webkitdirectory turns the picker into a FOLDER picker: every
+                 file then comes with its path inside the folder
+                 (file.webkitRelativePath = "Photos/2026/beach.jpg"). -->
             <input id="file-input" type="file" multiple hidden />
+            <input id="folder-input" type="file" webkitdirectory multiple hidden />
           </header>
+
+          <!-- Where we are in the cloud: "All files / Courses / 2026". The
+               last step is the current folder (aria-current="page"); the
+               others are buttons to go back up. -->
+          <nav id="folder-path" class="folder-path" aria-label="Folder path">
+            <ol id="breadcrumb" class="breadcrumb"></ol>
+          </nav>
 
           <!-- Drag & drop is a mouse-only gesture: the drop zone is therefore
                also a real button that opens the file picker (keyboard and
@@ -280,10 +322,10 @@
               <!-- Drag & drop does not exist on a touchscreen: the wording
                    follows the kind of pointer (css/files.css). -->
               <span class="dropzone-title">
-                <span class="for-mouse">Drop your files here</span>
+                <span class="for-mouse">Drop your files or folders here</span>
                 <span class="for-touch">Tap to add files</span>
               </span>
-              <span id="dropzone-hint" class="dropzone-hint">or click to browse · stored on your own server, nowhere else</span>
+              <span id="dropzone-hint" class="dropzone-hint">or click to browse · stored in <span id="dropzone-target">your cloud</span>, on your own server</span>
             </span>
           </button>
 
@@ -294,11 +336,22 @@
           <ul id="upload-queue" class="upload-queue" aria-label="Uploads" hidden></ul>
 
           <div class="files-scroll">
-            <ul id="file-list" class="file-list" aria-label="Your files"></ul>
+            <!-- Inline form shown by "New folder" (Enter creates, Escape cancels). -->
+            <form id="folder-form" class="folder-form" hidden>
+              <span class="file-icon" data-kind="folder" aria-hidden="true"></span>
+              <label for="folder-name" class="sr-only">Name of the new folder</label>
+              <input id="folder-name" class="folder-name-input" type="text" maxlength="255" autocomplete="off"
+                     spellcheck="false" aria-describedby="folder-form-error" />
+              <button type="submit" class="folder-form-btn folder-form-btn--create">Create</button>
+              <button id="folder-cancel" type="button" class="file-action" aria-label="Cancel" title="Cancel (Escape)"></button>
+              <p id="folder-form-error" class="folder-form-error" role="alert" hidden></p>
+            </form>
+            <!-- Folders first (by name), then files (newest first). -->
+            <ul id="file-list" class="file-list" aria-label="Folders and files"></ul>
             <div id="files-empty" class="files-empty" hidden>
               <span class="files-empty-mascot js-mascot"></span>
-              <p class="files-empty-title">Your cloud is still empty</p>
-              <p class="files-empty-text">Drop a first document: it stays on this machine. You will be able to add it to the AI memory later.</p>
+              <p id="files-empty-title" class="files-empty-title">Your cloud is still empty</p>
+              <p id="files-empty-text" class="files-empty-text">Drop a first document: it stays on this machine. You will be able to add it to the AI memory later.</p>
             </div>
             <p id="files-error" class="files-error" role="alert" hidden></p>
           </div>
@@ -306,7 +359,7 @@
           <!-- Shown while files are dragged over the panel. -->
           <div class="drop-overlay" aria-hidden="true">
             <span class="drop-overlay-mascot js-mascot"></span>
-            <span class="drop-overlay-text">Release to upload to your cloud</span>
+            <span class="drop-overlay-text">Release to upload to <span id="drop-overlay-target">your cloud</span></span>
           </div>
         </div>
       </section>
@@ -371,11 +424,23 @@
             </header>
 
             <!-- role="log": a chat history, announced to screen readers as new messages arrive -->
-            <div id="chat-history" class="chat" role="log" aria-live="polite" aria-label="Messages">
+            <!-- tabindex="0": keyboard users can focus the history and scroll it
+                 with the arrow keys (a scrollable region must be reachable). -->
+            <div id="chat-history" class="chat" role="log" aria-live="polite" aria-label="Messages" tabindex="0">
               <div id="messages" class="messages"></div>
             </div>
 
             <footer class="composer-wrap">
+              <!-- Shown when the latest message is out of view (the reader
+                   scrolled up, possibly while the model is still writing). -->
+              <button id="jump-latest" type="button" class="jump-latest" aria-label="Scroll to the latest message"
+                      title="Back to the latest message" hidden>
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.4"
+                     stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">
+                  <path d="M12 5v14M5.5 12.5 12 19l6.5-6.5" />
+                </svg>
+                <span class="jump-latest-label">Latest</span>
+              </button>
               <p id="rag-status" class="rag-status" aria-live="polite" hidden></p>
               <form id="chat-form" class="composer">
                 <label for="user-input" class="sr-only">Your message</label>

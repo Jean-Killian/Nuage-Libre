@@ -44,6 +44,21 @@ class ChatRequest(BaseModel):
         return value
 
 
+class FolderCreate(BaseModel):
+    """Body of ``POST /api/folders``."""
+
+    # Generous raw limit: the real rules (cleaning, 255 characters, no "/")
+    # are applied by the service, which returns a clear message (422).
+    name: str = Field(min_length=1, max_length=1024)
+    # None => at the root of the cloud.
+    parent_id: uuid.UUID | None = None
+    # What to do if a sibling already has this name:
+    # - "fail": refuse with 409 (a folder typed by the user: tell them);
+    # - "rename": take the next free name, "Photos (2)" (a folder uploaded
+    #   from the computer: never merge it into an existing folder).
+    on_conflict: Literal["fail", "rename"] = "fail"
+
+
 # --- Output ------------------------------------------------------------------
 class MessageOut(BaseModel):
     # from_attributes=True lets Pydantic read values directly from an ORM
@@ -110,6 +125,8 @@ class FileOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    # Folder the file is shown in (None = the root of the cloud).
+    folder_id: uuid.UUID | None
     filename: str
     mime_type: str
     size: int
@@ -122,3 +139,40 @@ class FileOut(BaseModel):
         """Can the "View" action display it in the browser? Decided by the
         server's allow-list, so the UI never has to duplicate the rule."""
         return can_preview(self.mime_type)
+
+
+class FolderOut(BaseModel):
+    """One folder of the private cloud (``user_id`` is not exposed)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    # None = at the root of the cloud.
+    parent_id: uuid.UUID | None
+    created_at: datetime
+
+
+class FolderRef(BaseModel):
+    """One step of a folder path (breadcrumb)."""
+
+    id: uuid.UUID
+    name: str
+
+
+class FolderDetail(FolderOut):
+    """A folder with its path from the root, for the breadcrumb
+    ("My cloud / Courses / 2026"): root first, the folder itself last."""
+
+    path: list[FolderRef]
+
+
+class CloudSummaryOut(BaseModel):
+    """Totals over the whole cloud of the caller (every folder)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    files: int
+    folders: int
+    total_size: int
+    in_ai_memory: int

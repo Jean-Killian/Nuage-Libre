@@ -1,0 +1,7 @@
+version = 1
+requires-python = ">=3.12"
+
+[[package]]
+name = "nuage-libre"
+version = "0.5.1"
+source = { virtual = "." }

@@ -17,6 +17,12 @@ Data model (see docs/DATABASE.md for the full MCD / MLD):
     users 1 ──────< N files
     - a user owns 0..N files stored in the private cloud. A user who still
       owns files cannot be deleted (ON DELETE RESTRICT): see StoredFile.
+
+    users 1 ──────< N folders 1 ──────< N folders (sub-folders)
+                          1 ──────< N files
+    - a user owns 0..N folders; a folder sits in 0..1 parent folder of the
+      SAME user (none = at the root of the cloud) and contains 0..N
+      sub-folders and 0..N files. Folders are purely logical: see Folder.
 """
 
 import uuid
@@ -28,6 +34,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -170,6 +177,87 @@ class Message(Base):
     )
 
 
+class Folder(Base):
+    """A folder of the private cloud: a purely LOGICAL container.
+
+    Folders exist only in this table. On disk, every file stays at
+    "<user_id>/<file_id>" whatever folder it is shown in (see StoredFile),
+    which means:
+
+    - a folder name is never part of a path on disk: no path traversal, no
+      characters forbidden by the file system, no length limit of the disk;
+    - renaming or moving a folder (future) is one UPDATE of one row, not a
+      move of gigabytes on the disk;
+    - the security of the storage folder does not change at all.
+
+    The tree is an *adjacency list*: each folder points to its parent
+    (``parent_id``), NULL meaning "at the root of the cloud". It is the
+    simplest model to keep consistent (one row per folder, nothing to update
+    elsewhere when a folder is added), and PostgreSQL walks it with a
+    recursive query (WITH RECURSIVE) to build the path of a folder.
+    """
+
+    __tablename__ = "folders"
+
+    # Generated in Python (uuid4) by the repository, like files: the object
+    # is then complete without being reloaded after the INSERT.
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
+    )
+    # Folders are only metadata (no bytes on disk), so deleting a user can
+    # safely delete them with CASCADE, like conversations. Files keep their
+    # own ON DELETE RESTRICT, which still protects the user's bytes.
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE", name="fk_folders_user_id_users"),
+        nullable=False,
+    )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
+    # Display name (cleaned, see services/file_policy.py: clean_folder_name).
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        # (id, user_id) is unique anyway since id is the primary key. Declaring
+        # it lets the composite foreign keys below reference the PAIR.
+        UniqueConstraint("id", "user_id", name="uq_folders_id_user_id"),
+        # Composite foreign key: the parent must be a folder of the SAME
+        # user. With a plain "parent_id REFERENCES folders(id)", a buggy or
+        # malicious request could hang a folder under someone else's tree;
+        # here PostgreSQL itself refuses it, whatever the application does.
+        # ON DELETE CASCADE: deleting a folder deletes its sub-folders, but
+        # the files they contain stop it (files: ON DELETE RESTRICT), so
+        # bytes on disk are never forgotten.
+        ForeignKeyConstraint(
+            ["parent_id", "user_id"],
+            ["folders.id", "folders.user_id"],
+            ondelete="CASCADE",
+            name="fk_folders_parent_id_folders",
+        ),
+        # Two folders side by side cannot share a name (like any file
+        # system), so a path such as "Courses / 2026" is never ambiguous.
+        # NULLS NOT DISTINCT (PostgreSQL 15+): by default NULL values are all
+        # "different", so two "Photos" folders at the ROOT (parent_id NULL)
+        # would both be accepted. This option treats the root as one place.
+        # The constraint's index also answers "sub-folders of X, by name".
+        UniqueConstraint(
+            "user_id",
+            "parent_id",
+            "name",
+            name="uq_folders_user_id_parent_id_name",
+            postgresql_nulls_not_distinct=True,
+        ),
+        CheckConstraint("name <> ''", name="ck_folders_name_not_empty"),
+        # A folder cannot be its own parent (the smallest possible cycle).
+        # Longer cycles cannot be created through the API (a folder only
+        # gets a parent that already exists, and there is no "move" yet);
+        # the recursive path query is bounded anyway (MAX_FOLDER_DEPTH).
+        CheckConstraint("parent_id <> id", name="ck_folders_not_own_parent"),
+    )
+
+
 class StoredFile(Base):
     """One file uploaded to the private cloud.
 
@@ -195,6 +283,9 @@ class StoredFile(Base):
         ForeignKey("users.id", ondelete="RESTRICT", name="fk_files_user_id_users"),
         nullable=False,
     )
+    # Folder the file is shown in; NULL = at the root of the cloud. Only
+    # metadata: it does not change where the bytes are stored on disk.
+    folder_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     # Display name chosen by the user (cleaned, see services/file_policy.py).
     # It is NEVER used to build a path on disk.
     filename: Mapped[str] = mapped_column(String(255), nullable=False)
@@ -228,6 +319,19 @@ class StoredFile(Base):
         ),
         CheckConstraint("size >= 0", name="ck_files_size_not_negative"),
         CheckConstraint("filename <> ''", name="ck_files_filename_not_empty"),
-        # The file manager lists "the files of user X, newest first".
-        Index("ix_files_user_id_created_at", "user_id", "created_at"),
+        # The folder must belong to the file's owner (composite foreign key,
+        # same reasoning as fk_folders_parent_id_folders). ON DELETE
+        # RESTRICT: a folder that still holds files cannot be deleted,
+        # because its rows point to bytes PostgreSQL cannot delete.
+        ForeignKeyConstraint(
+            ["folder_id", "user_id"],
+            ["folders.id", "folders.user_id"],
+            ondelete="RESTRICT",
+            name="fk_files_folder_id_folders",
+        ),
+        # The file manager lists "the files of user X in folder Y, newest
+        # first". This index answers it directly. It replaces the former
+        # (user_id, created_at) index: user_id still comes first, so it also
+        # serves the foreign key checks when a user or a folder is deleted.
+        Index("ix_files_user_id_folder_id_created_at", "user_id", "folder_id", "created_at"),
     )

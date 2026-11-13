@@ -19,6 +19,7 @@ from app.database import SessionLocal
 from app.repositories.file_storage import FileStorage
 from app.services.chat_service import ChatService
 from app.services.file_service import FileService
+from app.services.folder_service import FolderService
 from app.services.model_catalog import ModelCatalog
 from app.services.ollama_client import OllamaClient
 
@@ -51,3 +52,7 @@ def get_file_service(
     settings: Settings = Depends(get_settings),
 ) -> FileService:
     return FileService(storage=storage, settings=settings)
+
+
+def get_folder_service() -> FolderService:
+    return FolderService()

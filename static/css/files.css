@@ -13,10 +13,10 @@
    not of the screen.
 
    Sections
-     1. Panel and header
+     1. Panel and header (+ folder path)
      2. Drop zone and drag-over overlay
      3. Upload queue (progress bars)
-     4. File list
+     4. File list (folders and files, "New folder" form)
      5. Empty state and errors
    ========================================================================== */
 
@@ -92,6 +92,97 @@
   transform: scale(0.96);
 }
 
+.files-actions {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Secondary actions ("New folder", "Upload folder"): frosted pills, so the
+   gradient stays reserved for the main action of the panel. */
+.files-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 42px;
+  padding: 0 14px;
+  border-radius: var(--radius-pill);
+  font-size: 0.86rem;
+  font-weight: 800;
+  color: var(--text-soft);
+  background: var(--surface-strong);
+  box-shadow: 0 0 0 1px var(--hairline);
+  transition: color 200ms ease, transform 240ms var(--ease-soft), background 200ms ease;
+}
+
+.files-action-btn:hover {
+  color: var(--accent-ink);
+  transform: translateY(-2px);
+}
+
+/* Folder path ("breadcrumb"): All files / Courses / 2026. One line; a long
+   path scrolls sideways and its end (the current folder) is kept in view. */
+.folder-path {
+  margin: -4px 0 0;
+  overflow-x: auto;
+  scrollbar-width: none;     /* swipe or wheel; the steps stay clean */
+}
+
+.breadcrumb {
+  list-style: none;
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 2px;
+  white-space: nowrap;
+}
+
+.breadcrumb-step {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Separator: a small chevron drawn in CSS (no character to be read aloud). */
+.breadcrumb-step + .breadcrumb-step::before {
+  content: "";
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin: 0 8px 0 4px;
+  border-top: 2px solid var(--text-faint);
+  border-right: 2px solid var(--text-faint);
+  transform: rotate(45deg);
+  opacity: 0.7;
+}
+
+.breadcrumb-link,
+.breadcrumb-current {
+  max-width: 22ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.breadcrumb-link {
+  color: var(--accent-ink);
+  transition: background 160ms ease;
+}
+
+.breadcrumb-link:hover {
+  background: var(--surface-hover);
+}
+
+.breadcrumb-current {
+  color: var(--text);
+  background: var(--surface-strong);
+  box-shadow: 0 0 0 1px var(--hairline);
+}
+
 /* ---- 2. Drop zone and drag-over overlay ---------------------------------- */
 
 .dropzone {
@@ -155,6 +246,12 @@
 @media (pointer: coarse) {
   .for-mouse { display: none; }
   .for-touch { display: inline; }
+}
+
+/* Phones and tablets have no folder picker (their file dialogs only select
+   files), so "Upload folder" would open a picker that cannot do its job. */
+@media (hover: none) and (pointer: coarse) {
+  #upload-folder-btn { display: none; }
 }
 
 /* Covers the whole panel while files are dragged over it. pointer-events:
@@ -336,6 +433,7 @@
   background: color-mix(in srgb, var(--kind-ink) 10%, transparent);
 }
 
+.file-icon[data-kind="folder"] { --kind-ink: var(--accent-ink); }
 .file-icon[data-kind="image"] { --kind-ink: var(--accent-ink-pink); }
 .file-icon[data-kind="document"] { --kind-ink: var(--accent-ink); }
 .file-icon[data-kind="media"] { --kind-ink: var(--accent-ink-violet); }
@@ -347,6 +445,104 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
+}
+
+/* A folder row is ONE button (click, Enter or Space opens the folder); it
+   fills the row so the whole surface reacts. */
+.folder-item {
+  padding: 0;
+}
+
+.folder-open {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px 9px 10px;
+  border-radius: inherit;
+  text-align: left;
+}
+
+.folder-chevron {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-top: 2px solid var(--text-faint);
+  border-right: 2px solid var(--text-faint);
+  transform: rotate(45deg);
+  transition: transform 240ms var(--ease-soft), border-color 200ms ease;
+}
+
+.folder-open:hover .folder-chevron {
+  border-color: var(--accent-ink);
+  transform: translateX(3px) rotate(45deg);
+}
+
+/* "New folder" form: looks like the row it is about to become. */
+.folder-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 0 0 6px;
+  padding: 8px 8px 8px 10px;
+  border-radius: 20px 24px 22px 18px;
+  background: var(--surface-strong);
+  box-shadow: var(--bubble-shadow), 0 0 0 1px var(--hairline);
+  animation: float-in 420ms var(--ease-soft) both;
+}
+
+.folder-name-input {
+  flex: 1;
+  min-width: 8ch;
+  height: 38px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1.5px var(--dropzone-border);
+  font: inherit;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.folder-name-input:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent-ink);
+}
+
+.folder-name-input[aria-invalid="true"] {
+  box-shadow: inset 0 0 0 2px var(--error-text);
+}
+
+.folder-form-btn {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: var(--radius-pill);
+  font-size: 0.84rem;
+  font-weight: 800;
+  color: var(--send-text);
+  background: var(--send-bg);
+  transition: transform 240ms var(--ease-soft), opacity 200ms ease;
+}
+
+.folder-form-btn:hover {
+  transform: translateY(-1px);
+}
+
+.folder-form-btn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+.folder-form-error {
+  flex-basis: 100%;
+  margin: 0 0 0 56px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--error-text);
 }
 
 .file-name {
@@ -453,8 +649,21 @@
   }
 }
 
+/* Medium panel (split-screen): the secondary header actions keep only their
+   icon (their aria-label and tooltip still name them), so the summary line
+   keeps the room it needs. */
+@container files (max-width: 860px) {
+  .files-action-label { display: none; }
+  .files-action-btn {
+    width: 42px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+
 @container files (max-width: 420px) {
   .dropzone-hint { display: none; }
+  .upload-btn { padding: 10px 14px; }
   .file-icon {
     width: 38px;
     height: 36px;

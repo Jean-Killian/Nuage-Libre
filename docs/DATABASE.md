@@ -23,6 +23,11 @@ business rules → conceptual model (MCD) → logical model (MLD) → physical m
 | R12 | A user who still owns files cannot be deleted (their bytes on disk must be removed first). |
 | R13 | A file has a display name, a type, a size (≥ 0) and a storage location *relative* to the storage folder; two files never share a location. |
 | R14 | A file is either only stored in the cloud, or also indexed in the AI memory (`is_vectorized`); uploading only stores it. |
+| R15 | A folder belongs to exactly one user and has a non-empty name; a user owns zero or more folders. Deleting a user deletes their folders. |
+| R16 | A folder is either at the root of the cloud or inside exactly one parent folder **of the same user**; it contains zero or more folders and zero or more files. |
+| R17 | Two folders in the same place (same parent, or both at the root) never share a name. |
+| R18 | A file is either at the root or in exactly one folder **of the same user**. A folder that still contains files, directly or in a sub-folder, cannot be deleted; deleting an empty folder deletes its (empty) sub-folders. |
+| R19 | A folder is never its own parent, and folders are nested at most 32 levels deep. |
 
 ## 2. Conceptual data model (MCD, Merise)
 
@@ -38,23 +43,28 @@ business rules → conceptual model (MCD) → logical model (MLD) → physical m
         │                         └────────────────────┘                │ token_count        │
         │ STORES                                                        │ generation_ms      │
         │ 1,1                                                           │ created_at         │
-┌────────────────┐                                                      └────────────────────┘
-│      FILE      │
-├────────────────┤
-│ id             │
-│ filename       │
-│ file_path      │
-│ mime_type      │
-│ size           │
-│ is_vectorized  │
+┌────────────────┐                ┌────────────────────┐                └────────────────────┘
+│      FILE      │    IS IN       │      FOLDER        │ 0,1
+├────────────────┤ 0,1 ───── 0,n  ├────────────────────┤──┐ IS INSIDE
+│ id             │                │ id                 │  │ (reflexive)
+│ filename       │                │ name               │  │
+│ file_path      │                │ created_at         │──┘ 0,n
+│ mime_type      │                └────────────────────┘
+│ size           │                     1,1 │ ORGANISES
+│ is_vectorized  │                     0,n │ (USER)
 │ created_at     │
 └────────────────┘
 ```
 
-Cardinalities: a user *owns* 0..n conversations and *stores* 0..n files (R10,
-R11); a conversation or a file belongs to exactly 1 user. A conversation
-*contains* 0..n messages (R2); a message is *contained in* exactly 1
-conversation (R3).
+Cardinalities: a user *owns* 0..n conversations, *stores* 0..n files and
+*organises* 0..n folders (R10, R11, R15); each of them belongs to exactly 1
+user. A conversation *contains* 0..n messages (R2); a message is *contained
+in* exactly 1 conversation (R3). A file *is in* 0..1 folder (0 = at the
+root) and a folder holds 0..n files (R18). The reflexive association *is
+inside* links a folder to 0..1 parent and 0..n children (R16): the tree.
+The rule "same user" across these associations (R16, R18) is an
+*inter-association constraint* that Merise notes beside the diagram; the
+physical model enforces it with composite foreign keys.
 
 ## 3. Logical data model (MLD)
 
@@ -63,12 +73,20 @@ Each 1,1 – 0,n association becomes a foreign key on the "1,1" side:
 - **users** (<u>id</u>, username, created_at)
 - **conversations** (<u>id</u>, #user_id, title, model, created_at, updated_at)
 - **messages** (<u>id</u>, #conversation_id, role, content, thinking, model, token_count, generation_ms, created_at)
-- **files** (<u>id</u>, #user_id, filename, file_path, mime_type, size, is_vectorized, created_at)
+- **files** (<u>id</u>, #user_id, #folder_id, filename, file_path, mime_type, size, is_vectorized, created_at)
+- **folders** (<u>id</u>, #user_id, #parent_id, name, created_at)
+
+The reflexive association becomes a foreign key of `folders` to itself
+(`parent_id`). For R16 and R18, `(parent_id, user_id)` and
+`(folder_id, user_id)` reference the pair `folders (id, user_id)`.
 
 ```mermaid
 erDiagram
     users ||--o{ conversations : owns
     users ||--o{ files : stores
+    users ||--o{ folders : organises
+    folders |o--o{ folders : "is inside"
+    folders |o--o{ files : "is in"
     conversations ||--o{ messages : contains
     users {
         uuid id PK
@@ -83,9 +101,17 @@ erDiagram
         timestamptz created_at
         timestamptz updated_at
     }
+    folders {
+        uuid id PK
+        uuid user_id FK "ON DELETE CASCADE"
+        uuid parent_id FK "nullable = root; (parent_id, user_id), CASCADE"
+        varchar(255) name "UNIQUE NULLS NOT DISTINCT per parent"
+        timestamptz created_at
+    }
     files {
         uuid id PK
         uuid user_id FK "ON DELETE RESTRICT"
+        uuid folder_id FK "nullable = root; (folder_id, user_id), RESTRICT"
         varchar(255) filename
         varchar(255) file_path "UNIQUE, relative"
         varchar(255) mime_type
@@ -110,7 +136,7 @@ erDiagram
 
 SQL generated from the Alembic migrations with `alembic upgrade head --sql`
 (the migration files in `migrations/versions/` are the source of truth). Final
-schema after the four migrations:
+schema after the five migrations:
 
 ```sql
 CREATE TABLE users (
@@ -151,9 +177,25 @@ CREATE TABLE messages (
 );
 CREATE INDEX ix_messages_conversation_id_created_at ON messages (conversation_id, created_at);
 
+CREATE TABLE folders (
+    id          UUID                     DEFAULT gen_random_uuid() NOT NULL,
+    user_id     UUID                     NOT NULL,
+    parent_id   UUID,                                       -- NULL = at the root
+    name        VARCHAR(255)             NOT NULL,
+    created_at  TIMESTAMP WITH TIME ZONE DEFAULT now() NOT NULL,
+    PRIMARY KEY (id),
+    CONSTRAINT ck_folders_name_not_empty CHECK (name <> ''),
+    CONSTRAINT ck_folders_not_own_parent CHECK (parent_id <> id),
+    CONSTRAINT fk_folders_parent_id_folders FOREIGN KEY (parent_id, user_id) REFERENCES folders (id, user_id) ON DELETE CASCADE,
+    CONSTRAINT fk_folders_user_id_users FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    CONSTRAINT uq_folders_id_user_id UNIQUE (id, user_id),
+    CONSTRAINT uq_folders_user_id_parent_id_name UNIQUE NULLS NOT DISTINCT (user_id, parent_id, name)
+);
+
 CREATE TABLE files (
     id             UUID                     DEFAULT gen_random_uuid() NOT NULL,
     user_id        UUID                     NOT NULL,
+    folder_id      UUID,                                    -- NULL = at the root
     filename       VARCHAR(255)             NOT NULL,
     file_path      VARCHAR(255)             NOT NULL,
     mime_type      VARCHAR(255)             NOT NULL,
@@ -165,9 +207,10 @@ CREATE TABLE files (
     CONSTRAINT uq_files_file_path UNIQUE (file_path),
     CONSTRAINT ck_files_path_relative CHECK (left(file_path, 1) <> '/' AND strpos(file_path, '..') = 0),
     CONSTRAINT ck_files_size_not_negative CHECK (size >= 0),
-    CONSTRAINT ck_files_filename_not_empty CHECK (filename <> '')
+    CONSTRAINT ck_files_filename_not_empty CHECK (filename <> ''),
+    CONSTRAINT fk_files_folder_id_folders FOREIGN KEY (folder_id, user_id) REFERENCES folders (id, user_id) ON DELETE RESTRICT
 );
-CREATE INDEX ix_files_user_id_created_at ON files (user_id, created_at);
+CREATE INDEX ix_files_user_id_folder_id_created_at ON files (user_id, folder_id, created_at);
 ```
 
 ### Type and constraint choices
@@ -189,7 +232,13 @@ CREATE INDEX ix_files_user_id_created_at ON files (user_id, created_at);
 | `files.file_path` relative + `UNIQUE` + `CHECK` (no leading `/`, no `..`) | Enforces R13; a row can never designate a file outside the storage folder (path traversal defence in the database itself) |
 | `BIGINT size` | A 32-bit `INTEGER` overflows at 2 GiB, the default upload limit |
 | `is_vectorized BOOLEAN DEFAULT false` | Enforces R14 |
-| Index `(user_id, created_at)` on `files` | "Files of user X, newest first" answered by the index |
+| Index `(user_id, folder_id, created_at)` on `files` | "Files of user X in folder Y, newest first" answered by the index; `user_id` first also serves the FK checks (user or folder deleted). Replaced `(user_id, created_at)` in v0.5.1 |
+| `folders`: adjacency list (`parent_id`) | Simplest tree to keep consistent: one row per folder, a move is one `UPDATE`; the path of a folder is one recursive query (`WITH RECURSIVE`, bounded). Alternatives compared in `docs/CLOUD_STORAGE.md` §11.2 |
+| Composite FKs `(parent_id, user_id)` and `(folder_id, user_id)` → `folders (id, user_id)` + `UNIQUE (id, user_id)` | Enforce R16 and R18 in the database: a folder or a file can only be placed in a folder of its own owner, whatever the application does |
+| `UNIQUE NULLS NOT DISTINCT (user_id, parent_id, name)` | Enforces R17 at the root too: with a plain `UNIQUE`, two NULL `parent_id` are "different" and duplicates at the root would pass (PostgreSQL ≥ 15). Its index also answers "sub-folders of X, by name" |
+| `files.folder_id` `ON DELETE RESTRICT`, `folders.parent_id` `ON DELETE CASCADE` | Enforce R18: deleting a folder takes its empty sub-folders, but never forgets files whose bytes are on disk |
+| `folders.user_id` `ON DELETE CASCADE` | Enforces R15: folders are metadata only, like conversations |
+| `CHECK (parent_id <> id)` | Part of R19; the depth limit (32) is checked by the service, and the recursive query is bounded |
 
 R7 (question + answer saved together) is enforced by the application with a
 single transaction, see `docs/ARCHITECTURE.md` §4.3. The consistency between a
@@ -259,6 +308,25 @@ INSERT INTO conversations (title, model) VALUES ('t', 'm');
 ERROR:  null value in column "user_id" of relation "conversations" violates not-null constraint  ✅
 ```
 
+### Verification of the v0.5.1 table (performed on 2026-11-12, test database)
+
+Connected as `nuage_app` (the default privileges of `db/init/` granted the
+four DML rights on the new table automatically, nothing else):
+
+```
+privileges of nuage_app on folders: SELECT, INSERT, UPDATE, DELETE           ✅
+DROP TABLE folders;
+ERROR:  must be owner of table folders                                        ✅
+ALTER TABLE folders DROP CONSTRAINT uq_folders_user_id_parent_id_name;
+ERROR:  must be owner of table folders                                        ✅
+INSERT INTO folders (user_id, name) VALUES ('a644871e-…', '');
+ERROR:  new row for relation "folders" violates check constraint "ck_folders_name_not_empty"  ✅
+```
+
+The composite foreign keys, `NULLS NOT DISTINCT`, `RESTRICT` / `CASCADE` and
+the bounded recursion are verified by the automated tests, which connect as
+`nuage_app` too (T-SEC-11, T-SEC-12, T-FOLD-14 to T-FOLD-17).
+
 ### Network exposure
 
 The container publishes port 5432 on `127.0.0.1` only (`compose.yaml`): the
@@ -288,6 +356,7 @@ venv/bin/alembic revision --autogenerate -m "add users table"
 | `902d09722b60` | 2026-11-09 | Add `messages.model` + backfill existing answers from `conversations.model` | Schema + **data** migration |
 | `c3e9a1d4b7f2` | 2026-11-12 | Create `users` + seed the Ghost User; add `conversations.user_id` (nullable → backfill → NOT NULL → FK); replace the `updated_at` index by `(user_id, updated_at)` | Schema + **data** migration |
 | `d8f2b6e1a5c4` | 2026-11-12 | Create `files` (FK RESTRICT, UNIQUE path, CHECK constraints, index) | Schema |
+| `6bb4819d7897` | 2026-11-12 | Create `folders` (composite FKs, `UNIQUE NULLS NOT DISTINCT`, CHECKs); add `files.folder_id` (nullable: existing files stay at the root, no backfill) + composite FK; replace the `files` index by `(user_id, folder_id, created_at)` | Schema (v0.5.1) |
 
 The second migration shows the two kinds of migration: `ADD COLUMN` changes the
 structure, and an `UPDATE … FROM` join fills the new column for rows that already
@@ -331,6 +400,14 @@ Reversibility of both v0.5 migrations: `alembic downgrade -2` (only
 `conversations` and `messages` remain, as in v0.4), then `alembic upgrade head`,
 then `alembic check` → "No new upgrade operations detected" (models and
 migrations in sync).
+
+**`6bb4819d7897` (folders, v0.5.1).** Autogenerated, then reviewed: the
+statements were reordered (the new index is created before the old one is
+dropped) and commented; nothing else needed changing, because the new column
+is nullable and NULL already means "at the root" for every existing file.
+Tested for reversibility (`downgrade` to `d8f2b6e1a5c4`, `upgrade head`,
+`alembic check`: no drift) and by a mutation (the migration without
+`NULLS NOT DISTINCT` makes T-FOLD-17 and T-FOLD-18 fail).
 
 Migrations run with the `nuage_owner` role (`NUAGE_MIGRATION_DATABASE_URL`);
 PostgreSQL's transactional DDL means a failing migration is fully rolled back.
